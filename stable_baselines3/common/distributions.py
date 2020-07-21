@@ -281,6 +281,9 @@ class CategoricalDistribution(Distribution):
     def entropy(self) -> th.Tensor:
         return self.distribution.entropy()
 
+    def probabilities(self) -> th.Tensor:
+        return self.distribution.probs
+
     def sample(self) -> th.Tensor:
         return self.distribution.sample()
 
@@ -337,6 +340,9 @@ class MultiCategoricalDistribution(Distribution):
     def entropy(self) -> th.Tensor:
         return th.stack([dist.entropy() for dist in self.distributions], dim=1).sum(dim=1)
 
+    def probabilities(self) -> th.Tensor:
+        return th.stack([dist.probs for dist in self.distributions], dim=1).sum(dim=1)
+
     def sample(self) -> th.Tensor:
         return th.stack([dist.sample() for dist in self.distributions], dim=1)
 
@@ -387,6 +393,9 @@ class BernoulliDistribution(Distribution):
 
     def entropy(self) -> th.Tensor:
         return self.distribution.entropy().sum(dim=1)
+
+    def probabilities(self) -> th.Tensor:
+        return self.distribution.probs.sum(dim=1)
 
     def sample(self) -> th.Tensor:
         return self.distribution.sample()
