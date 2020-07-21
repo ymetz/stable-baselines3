@@ -191,7 +191,7 @@ class BasePolicy(BaseModel):
             module.bias.data.fill_(0.0)
 
     @abstractmethod
-    def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
+    def _predict(self, observation: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, Optional[th.Tensor]]:
         """
         Get the action according to the policy for a given observation.
 
@@ -209,7 +209,7 @@ class BasePolicy(BaseModel):
         state: Optional[np.ndarray] = None,
         mask: Optional[np.ndarray] = None,
         deterministic: bool = False,
-    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    ) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
         """
         Get the policy action and state from an observation (and optional state).
         Includes sugar-coating to handle different observations (e.g. normalizing images).
@@ -218,7 +218,7 @@ class BasePolicy(BaseModel):
         :param state: (Optional[np.ndarray]) The last states (can be None, used in recurrent policies)
         :param mask: (Optional[np.ndarray]) The last masks (can be None, used in recurrent policies)
         :param deterministic: (bool) Whether or not to return deterministic actions.
-        :return: (Tuple[np.ndarray, Optional[np.ndarray]]) the model's action and the next state
+        :return: (Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]) the model's action and the next state
             (used in recurrent policies)
         """
         # TODO (GH/1): add support for RNN policies
@@ -248,9 +248,12 @@ class BasePolicy(BaseModel):
 
         observation = th.as_tensor(observation).to(self.device)
         with th.no_grad():
-            actions = self._predict(observation, deterministic=deterministic)
+            actions, distribution = self._predict(observation, deterministic=deterministic)
         # Convert to numpy
         actions = actions.cpu().numpy()
+        probabilities = None
+        if hasattr(distribution, 'probabilities'):
+            probabilities = distribution.probabilities().cpu().numpy()
 
         if isinstance(self.action_space, gym.spaces.Box):
             if self.squash_output:
@@ -266,7 +269,7 @@ class BasePolicy(BaseModel):
                 raise ValueError("Error: The environment must be vectorized when using recurrent policies.")
             actions = actions[0]
 
-        return actions, state
+        return actions, state, probabilities
 
     def scale_action(self, action: np.ndarray) -> np.ndarray:
         """
@@ -494,7 +497,7 @@ class ActorCriticPolicy(BasePolicy):
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
 
-    def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+    def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
         """
         Forward pass in all the networks (actor and critic)
 
@@ -505,10 +508,10 @@ class ActorCriticPolicy(BasePolicy):
         latent_pi, latent_vf, latent_sde = self._get_latent(obs)
         # Evaluate the values for the given observations
         values = self.value_net(latent_vf)
-        distribution = self._get_action_dist_from_latent(latent_pi, latent_sde=latent_sde)
+        distribution, pre_softmax_logits = self._get_action_dist_from_latent(latent_pi, latent_sde=latent_sde)
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
-        return actions, values, log_prob
+        return actions, values, log_prob, pre_softmax_logits
 
     def _get_latent(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
@@ -529,7 +532,8 @@ class ActorCriticPolicy(BasePolicy):
             latent_sde = self.sde_features_extractor(features)
         return latent_pi, latent_vf, latent_sde
 
-    def _get_action_dist_from_latent(self, latent_pi: th.Tensor, latent_sde: Optional[th.Tensor] = None) -> Distribution:
+    def _get_action_dist_from_latent(self, latent_pi: th.Tensor, latent_sde: Optional[th.Tensor] = None) \
+            -> Tuple[Distribution, th.Tensor]:
         """
         Retrieve action distribution given the latent codes.
 
@@ -540,22 +544,22 @@ class ActorCriticPolicy(BasePolicy):
         mean_actions = self.action_net(latent_pi)
 
         if isinstance(self.action_dist, DiagGaussianDistribution):
-            return self.action_dist.proba_distribution(mean_actions, self.log_std)
+            return self.action_dist.proba_distribution(mean_actions, self.log_std), mean_actions
         elif isinstance(self.action_dist, CategoricalDistribution):
             # Here mean_actions are the logits before the softmax
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions), mean_actions
         elif isinstance(self.action_dist, MultiCategoricalDistribution):
             # Here mean_actions are the flattened logits
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions), mean_actions
         elif isinstance(self.action_dist, BernoulliDistribution):
             # Here mean_actions are the logits (before rounding to get the binary actions)
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions), mean_actions
         elif isinstance(self.action_dist, StateDependentNoiseDistribution):
-            return self.action_dist.proba_distribution(mean_actions, self.log_std, latent_sde)
+            return self.action_dist.proba_distribution(mean_actions, self.log_std, latent_sde), mean_actions
         else:
             raise ValueError("Invalid action distribution")
 
-    def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
+    def _predict(self, observation: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, Optional[th.Tensor]]:
         """
         Get the action according to the policy for a given observation.
 
@@ -564,8 +568,8 @@ class ActorCriticPolicy(BasePolicy):
         :return: (th.Tensor) Taken action according to the policy
         """
         latent_pi, _, latent_sde = self._get_latent(observation)
-        distribution = self._get_action_dist_from_latent(latent_pi, latent_sde)
-        return distribution.get_actions(deterministic=deterministic)
+        distribution, _ = self._get_action_dist_from_latent(latent_pi, latent_sde)
+        return distribution.get_actions(deterministic=deterministic), distribution
 
     def evaluate_actions(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
@@ -578,7 +582,7 @@ class ActorCriticPolicy(BasePolicy):
             and entropy of the action distribution.
         """
         latent_pi, latent_vf, latent_sde = self._get_latent(obs)
-        distribution = self._get_action_dist_from_latent(latent_pi, latent_sde)
+        distribution, _ = self._get_action_dist_from_latent(latent_pi, latent_sde)
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
         return values, log_prob, distribution.entropy()
