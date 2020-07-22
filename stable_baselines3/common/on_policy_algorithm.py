@@ -152,7 +152,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             with th.no_grad():
                 # Convert to pytorch tensor
                 obs_tensor = th.as_tensor(self._last_obs).to(self.device)
-                actions, values, log_probs = self.policy.forward(obs_tensor)
+                actions, values, log_probs, _ = self.policy.forward(obs_tensor)
             actions = actions.cpu().numpy()
 
             # Rescale and perform action
