@@ -116,7 +116,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self.action_space,
             self.lr_schedule,
             use_sde=self.use_sde,
-            device=self.device,
             **self.policy_kwargs  # pytype:disable=not-instantiable
         )
         self.policy = self.policy.to(self.device)
@@ -163,6 +162,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
+            # Give access to local variables
+            callback.update_locals(locals())
             if callback.on_step() is False:
                 return False
 
@@ -173,8 +174,9 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             if isinstance(self.action_space, gym.spaces.Discrete):
                 # Reshape in case of discrete action
                 actions = actions.reshape(-1, 1)
-            rollout_buffer.add(self._last_obs, actions, rewards, dones, values, log_probs)
+            rollout_buffer.add(self._last_obs, actions, rewards, self._last_dones, values, log_probs)
             self._last_obs = new_obs
+            self._last_dones = dones
 
         rollout_buffer.compute_returns_and_advantage(values, dones=dones)
 
