@@ -3,20 +3,65 @@
 Changelog
 ==========
 
-Pre-Release 0.9.0a1 (WIP)
+
+Pre-Release 0.10.0a0 (WIP)
 ------------------------------
 
 Breaking Changes:
 ^^^^^^^^^^^^^^^^^
+
+New Features:
+^^^^^^^^^^^^^
+
+Bug Fixes:
+^^^^^^^^^^
+
+Deprecations:
+^^^^^^^^^^^^^
+
+Others:
+^^^^^^^
+- Improved typing coverage
+- Improved error messages for unsupported spaces
+
+Documentation:
+^^^^^^^^^^^^^^
+- Added first draft of migration guide
+
+
+Pre-Release 0.9.0 (2020-10-03)
+------------------------------
+
+**Bug fixes, get/set parameters  and improved docs**
+
+Breaking Changes:
+^^^^^^^^^^^^^^^^^
 - Removed ``device`` keyword argument of policies; use ``policy.to(device)`` instead. (@qxcv)
+- Rename ``BaseClass.get_torch_variables`` -> ``BaseClass._get_torch_save_params`` and ``BaseClass.excluded_save_params`` -> ``BaseClass._excluded_save_params``
+- Renamed saved items ``tensors`` to ``pytorch_variables`` for clarity
+- ``make_atari_env``, ``make_vec_env`` and ``set_random_seed`` must be imported with (and not directly from ``stable_baselines3.common``):
+
+.. code-block:: python
+
+  from stable_baselines3.common.cmd_util import make_atari_env, make_vec_env
+  from stable_baselines3.common.utils import set_random_seed
+
 
 New Features:
 ^^^^^^^^^^^^^
 - Added ``unwrap_vec_wrapper()`` to ``common.vec_env`` to extract ``VecEnvWrapper`` if needed
+- Added ``StopTrainingOnMaxEpisodes`` to callback collection (@xicocaio)
+- Added ``device`` keyword argument to ``BaseAlgorithm.load()`` (@liorcohen5)
+- Callbacks have access to rollout collection locals as in SB2. (@PartiallyTyped)
+- Added ``get_parameters`` and ``set_parameters`` for accessing/setting parameters of the agent
+- Added actor/critic loss logging for TD3. (@mloo3)
 
 Bug Fixes:
 ^^^^^^^^^^
 - Fixed a bug where the environment was reset twice when using ``evaluate_policy``
+- Fix logging of ``clip_fraction`` in PPO (@diditforlulz273)
+- Fixed a bug where cuda support was wrongly checked when passing the GPU index, e.g., ``device="cuda:0"`` (@liorcohen5)
+- Fixed a bug when the random seed was not properly set on cuda when passing the GPU index
 
 Deprecations:
 ^^^^^^^^^^^^^
@@ -24,11 +69,24 @@ Deprecations:
 Others:
 ^^^^^^^
 - Improve typing coverage of the ``VecEnv``
+- Fix type annotation of ``make_vec_env`` (@ManifoldFR)
 - Removed ``AlreadySteppingError`` and ``NotSteppingError`` that were not used
 - Fixed typos in SAC and TD3
+- Reorganized functions for clarity in ``BaseClass`` (save/load functions close to each other, private
+  functions at top)
+- Clarified docstrings on what is saved and loaded to/from files
+- Simplified ``save_to_zip_file`` function by removing duplicate code
+- Store library version along with the saved models
+- DQN loss is now logged
 
 Documentation:
 ^^^^^^^^^^^^^^
+- Added ``StopTrainingOnMaxEpisodes`` details and example (@xicocaio)
+- Updated custom policy section (added custom feature extractor example)
+- Re-enable ``sphinx_autodoc_typehints``
+- Updated doc style for type hints and remove duplicated type hints
+
+
 
 Pre-Release 0.8.0 (2020-08-03)
 ------------------------------
@@ -42,7 +100,7 @@ Breaking Changes:
 - Refactored ``Critic`` class for ``TD3`` and ``SAC``, it is now called ``ContinuousCritic``
   and has an additional parameter ``n_critics``
 - ``SAC`` and ``TD3`` now accept an arbitrary number of critics (e.g. ``policy_kwargs=dict(n_critics=3)``)
-    instead of only 2 previously
+  instead of only 2 previously
 
 New Features:
 ^^^^^^^^^^^^^
@@ -54,7 +112,6 @@ New Features:
 - Refactored opening paths for saving and loading to use strings, pathlib or io.BufferedIOBase (@PartiallyTyped)
 - Added ``DDPG`` algorithm as a special case of ``TD3``.
 - Introduced ``BaseModel`` abstract parent for ``BasePolicy``, which critics inherit from.
-- Callbacks have access to rollout collection locals as in SB2. (@PartiallyTyped)
 
 Bug Fixes:
 ^^^^^^^^^^
@@ -393,4 +450,5 @@ And all the contributors:
 @Miffyli @dwiel @miguelrass @qxcv @jaberkow @eavelardev @ruifeng96150 @pedrohbtp @srivatsankrishnan @evilsocket
 @MarvineGothic @jdossgollin @SyllogismRXS @rusu24edward @jbulow @Antymon @seheevic @justinkterry @edbeeching
 @flodorner @KuKuXia @NeoExtended @PartiallyTyped @mmcenta @richardwu @kinalmehta @rolandgvc @tkelestemur @mloo3
-@tirafesi @blurLake @koulakis @joeljosephjin @shwang @rk37 @andyshih12 @RaphaelWag
+@tirafesi @blurLake @koulakis @joeljosephjin @shwang @rk37 @andyshih12 @RaphaelWag @xicocaio
+@diditforlulz273 @liorcohen5 @ManifoldFR @mloo3
