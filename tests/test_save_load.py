@@ -45,7 +45,7 @@ def test_save_load(tmp_path, model_class):
 
     # create model
     model = model_class("MlpPolicy", env, policy_kwargs=dict(net_arch=[16]), verbose=1)
-    model.learn(total_timesteps=500, eval_freq=250)
+    model.learn(total_timesteps=500)
 
     env.reset()
     observations = np.concatenate([env.step([env.action_space.sample()])[0] for _ in range(10)], axis=0)
@@ -154,7 +154,7 @@ def test_save_load(tmp_path, model_class):
         assert np.allclose(selected_actions, new_selected_actions, 1e-4)
 
         # check if learn still works
-        model.learn(total_timesteps=1000, eval_freq=500)
+        model.learn(total_timesteps=500)
 
         del model
 
@@ -174,20 +174,26 @@ def test_set_env(model_class):
     env2 = DummyVecEnv([lambda: select_env(model_class)])
     env3 = select_env(model_class)
 
+    kwargs = {}
+    if model_class in {DQN, DDPG, SAC, TD3}:
+        kwargs = dict(learning_starts=100)
+    elif model_class in {A2C, PPO}:
+        kwargs = dict(n_steps=100)
+
     # create model
-    model = model_class("MlpPolicy", env, policy_kwargs=dict(net_arch=[16]))
+    model = model_class("MlpPolicy", env, policy_kwargs=dict(net_arch=[16]), **kwargs)
     # learn
-    model.learn(total_timesteps=1000, eval_freq=500)
+    model.learn(total_timesteps=300)
 
     # change env
     model.set_env(env2)
     # learn again
-    model.learn(total_timesteps=1000, eval_freq=500)
+    model.learn(total_timesteps=300)
 
     # change env test wrapping
     model.set_env(env3)
     # learn again
-    model.learn(total_timesteps=1000, eval_freq=500)
+    model.learn(total_timesteps=300)
 
 
 @pytest.mark.parametrize("model_class", MODEL_LIST)
@@ -221,12 +227,35 @@ def test_exclude_include_saved_params(tmp_path, model_class):
     os.remove(tmp_path / "test_save.zip")
 
 
+@pytest.mark.parametrize("model_class", [A2C, TD3])
+def test_save_load_env_cnn(tmp_path, model_class):
+    """
+    Test loading with an env that requires a ``CnnPolicy``.
+    This is to test wrapping and observation space check.
+    We test one on-policy and one off-policy
+    algorithm as the rest share the loading part.
+    """
+    env = FakeImageEnv(screen_height=40, screen_width=40, n_channels=2, discrete=False)
+    kwargs = dict(policy_kwargs=dict(net_arch=[32]))
+    if model_class == TD3:
+        kwargs.update(dict(buffer_size=100, learning_starts=50))
+
+    model = model_class("CnnPolicy", env, **kwargs).learn(100)
+    model.save(tmp_path / "test_save")
+    # Test loading with env and continuing training
+    model = model_class.load(str(tmp_path / "test_save.zip"), env=env).learn(100)
+    # clear file from os
+    os.remove(tmp_path / "test_save.zip")
+
+
 @pytest.mark.parametrize("model_class", [SAC, TD3, DQN])
 def test_save_load_replay_buffer(tmp_path, model_class):
     path = pathlib.Path(tmp_path / "logs/replay_buffer.pkl")
     path.parent.mkdir(exist_ok=True, parents=True)  # to not raise a warning
-    model = model_class("MlpPolicy", select_env(model_class), buffer_size=1000)
-    model.learn(500)
+    model = model_class(
+        "MlpPolicy", select_env(model_class), buffer_size=1000, policy_kwargs=dict(net_arch=[64]), learning_starts=200
+    )
+    model.learn(300)
     old_replay_buffer = deepcopy(model.replay_buffer)
     model.save_replay_buffer(path)
     model.replay_buffer = None
@@ -295,21 +324,23 @@ def test_save_load_policy(tmp_path, model_class, policy_str):
     :param model_class: (BaseAlgorithm) A RL model
     :param policy_str: (str) Name of the policy.
     """
-    kwargs = {}
+    kwargs = dict(policy_kwargs=dict(net_arch=[16]))
     if policy_str == "MlpPolicy":
         env = select_env(model_class)
     else:
-        if model_class in [SAC, TD3, DQN]:
+        if model_class in [SAC, TD3, DQN, DDPG]:
             # Avoid memory error when using replay buffer
             # Reduce the size of the features
-            kwargs = dict(buffer_size=250)
+            kwargs = dict(
+                buffer_size=250, learning_starts=100, policy_kwargs=dict(features_extractor_kwargs=dict(features_dim=32))
+            )
         env = FakeImageEnv(screen_height=40, screen_width=40, n_channels=2, discrete=model_class == DQN)
 
     env = DummyVecEnv([lambda: env])
 
     # create model
-    model = model_class(policy_str, env, policy_kwargs=dict(net_arch=[16]), verbose=1, **kwargs)
-    model.learn(total_timesteps=500, eval_freq=250)
+    model = model_class(policy_str, env, verbose=1, **kwargs)
+    model.learn(total_timesteps=300)
 
     env.reset()
     observations = np.concatenate([env.step([env.action_space.sample()])[0] for _ in range(10)], axis=0)
@@ -375,6 +406,82 @@ def test_save_load_policy(tmp_path, model_class, policy_str):
     os.remove(tmp_path / "policy.pkl")
     if actor_class is not None:
         os.remove(tmp_path / "actor.pkl")
+
+
+@pytest.mark.parametrize("model_class", [DQN])
+@pytest.mark.parametrize("policy_str", ["MlpPolicy", "CnnPolicy"])
+def test_save_load_q_net(tmp_path, model_class, policy_str):
+    """
+    Test saving and loading q-network/quantile net only.
+
+    :param model_class: (BaseAlgorithm) A RL model
+    :param policy_str: (str) Name of the policy.
+    """
+    kwargs = dict(policy_kwargs=dict(net_arch=[16]))
+    if policy_str == "MlpPolicy":
+        env = select_env(model_class)
+    else:
+        if model_class in [DQN]:
+            # Avoid memory error when using replay buffer
+            # Reduce the size of the features
+            kwargs = dict(
+                buffer_size=250,
+                learning_starts=100,
+                policy_kwargs=dict(features_extractor_kwargs=dict(features_dim=32)),
+            )
+        env = FakeImageEnv(screen_height=40, screen_width=40, n_channels=2, discrete=model_class == DQN)
+
+    env = DummyVecEnv([lambda: env])
+
+    # create model
+    model = model_class(policy_str, env, verbose=1, **kwargs)
+    model.learn(total_timesteps=300)
+
+    env.reset()
+    observations = np.concatenate([env.step([env.action_space.sample()])[0] for _ in range(10)], axis=0)
+
+    q_net = model.q_net
+    q_net_class = q_net.__class__
+
+    # Get dictionary of current parameters
+    params = deepcopy(q_net.state_dict())
+
+    # Modify all parameters to be random values
+    random_params = dict((param_name, th.rand_like(param)) for param_name, param in params.items())
+
+    # Update model parameters with the new random values
+    q_net.load_state_dict(random_params)
+
+    new_params = q_net.state_dict()
+    # Check that all params are different now
+    for k in params:
+        assert not th.allclose(params[k], new_params[k]), "Parameters did not change as expected."
+
+    params = new_params
+
+    # get selected actions
+    selected_actions, _ = q_net.predict(observations, deterministic=True)
+
+    # Save and load q_net
+    q_net.save(tmp_path / "q_net.pkl")
+
+    del q_net
+
+    q_net = q_net_class.load(tmp_path / "q_net.pkl")
+
+    # check if params are still the same after load
+    new_params = q_net.state_dict()
+
+    # Check that all params are the same as before save load procedure now
+    for key in params:
+        assert th.allclose(params[key], new_params[key]), "Policy parameters not the same after save and load."
+
+    # check if model still selects the same actions
+    new_selected_actions, _ = q_net.predict(observations, deterministic=True)
+    assert np.allclose(selected_actions, new_selected_actions, 1e-4)
+
+    # clear file from os
+    os.remove(tmp_path / "q_net.pkl")
 
 
 @pytest.mark.parametrize("pathtype", [str, pathlib.Path])

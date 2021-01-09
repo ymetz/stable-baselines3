@@ -1,13 +1,14 @@
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
+import gym
 import numpy as np
 import torch as th
 from torch.nn import functional as F
 
 from stable_baselines3.common import logger
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
-from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback
-from stable_baselines3.common.utils import get_linear_fn, polyak_update
+from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
+from stable_baselines3.common.utils import get_linear_fn, is_vectorized_observation, polyak_update
 from stable_baselines3.dqn.policies import DQNPolicy
 
 
@@ -22,7 +23,7 @@ class DQN(OffPolicyAlgorithm):
     :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
     :param env: The environment to learn from (if registered in Gym, can be str)
     :param learning_rate: The learning rate, it can be a function
-        of the current progress (from 1 to 0)
+        of the current progress remaining (from 1 to 0)
     :param buffer_size: size of the replay buffer
     :param learning_starts: how many steps of the model to collect transitions for before learning starts
     :param batch_size: Minibatch size for each gradient update
@@ -59,7 +60,7 @@ class DQN(OffPolicyAlgorithm):
         self,
         policy: Union[str, Type[DQNPolicy]],
         env: Union[GymEnv, str],
-        learning_rate: Union[float, Callable] = 1e-4,
+        learning_rate: Union[float, Schedule] = 1e-4,
         buffer_size: int = 1000000,
         learning_starts: int = 50000,
         batch_size: Optional[int] = 32,
@@ -105,6 +106,7 @@ class DQN(OffPolicyAlgorithm):
             seed=seed,
             sde_support=False,
             optimize_memory_usage=optimize_memory_usage,
+            supported_action_spaces=(gym.spaces.Discrete,),
         )
 
         self.exploration_initial_eps = exploration_initial_eps
@@ -135,7 +137,7 @@ class DQN(OffPolicyAlgorithm):
     def _on_step(self) -> None:
         """
         Update the exploration rate and target network if needed.
-        This method is called in ``collect_rollout()`` after each step in the environment.
+        This method is called in ``collect_rollouts()`` after each step in the environment.
         """
         if self.num_timesteps % self.target_update_interval == 0:
             polyak_update(self.q_net.parameters(), self.q_net_target.parameters(), self.tau)
@@ -153,23 +155,23 @@ class DQN(OffPolicyAlgorithm):
             replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
 
             with th.no_grad():
-                # Compute the target Q values
-                target_q = self.q_net_target(replay_data.next_observations)
+                # Compute the next Q-values using the target network
+                next_q_values = self.q_net_target(replay_data.next_observations)
                 # Follow greedy policy: use the one with the highest value
-                target_q, _ = target_q.max(dim=1)
+                next_q_values, _ = next_q_values.max(dim=1)
                 # Avoid potential broadcast issue
-                target_q = target_q.reshape(-1, 1)
+                next_q_values = next_q_values.reshape(-1, 1)
                 # 1-step TD target
-                target_q = replay_data.rewards + (1 - replay_data.dones) * self.gamma * target_q
+                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
 
-            # Get current Q estimates
-            current_q = self.q_net(replay_data.observations)
+            # Get current Q-values estimates
+            current_q_values = self.q_net(replay_data.observations)
 
             # Retrieve the q-values for the actions from the replay buffer
-            current_q = th.gather(current_q, dim=1, index=replay_data.actions.long())
+            current_q_values = th.gather(current_q_values, dim=1, index=replay_data.actions.long())
 
             # Compute Huber loss (less sensitive to outliers)
-            loss = F.smooth_l1_loss(current_q, target_q)
+            loss = F.smooth_l1_loss(current_q_values, target_q_values)
             losses.append(loss.item())
 
             # Optimize the policy
@@ -203,8 +205,11 @@ class DQN(OffPolicyAlgorithm):
             (used in recurrent policies)
         """
         if not deterministic and np.random.rand() < self.exploration_rate:
-            n_batch = observation.shape[0]
-            action = np.array([self.action_space.sample() for _ in range(n_batch)])
+            if is_vectorized_observation(observation, self.observation_space):
+                n_batch = observation.shape[0]
+                action = np.array([self.action_space.sample() for _ in range(n_batch)])
+            else:
+                action = np.array(self.action_space.sample())
         else:
             action, state = self.policy.predict(observation, state, mask, deterministic)
         return action, state

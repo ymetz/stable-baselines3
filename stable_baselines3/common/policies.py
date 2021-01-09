@@ -3,7 +3,7 @@
 import collections
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import gym
 import numpy as np
@@ -21,8 +21,10 @@ from stable_baselines3.common.distributions import (
 )
 from stable_baselines3.common.preprocessing import get_action_dim, is_image_space, preprocess_obs
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, FlattenExtractor, MlpExtractor, NatureCNN, create_mlp
+from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.common.utils import get_device, is_vectorized_observation
 from stable_baselines3.common.vec_env import VecTransposeImage
+from stable_baselines3.common.vec_env.obs_dict_wrapper import ObsDictWrapper
 
 
 class BaseModel(nn.Module, ABC):
@@ -36,7 +38,7 @@ class BaseModel(nn.Module, ABC):
     :param action_space: The action space of the environment
     :param features_extractor_class: Features extractor to use.
     :param features_extractor_kwargs: Keyword arguments
-        to pass to the feature extractor.
+        to pass to the features extractor.
     :param features_extractor: Network to extract features
         (a CNN when using images, a nn.Flatten() layer otherwise)
     :param normalize_images: Whether to normalize images or not,
@@ -82,6 +84,30 @@ class BaseModel(nn.Module, ABC):
     def forward(self, *args, **kwargs):
         del args, kwargs
 
+    def _update_features_extractor(
+        self, net_kwargs: Dict[str, Any], features_extractor: Optional[BaseFeaturesExtractor] = None
+    ) -> Dict[str, Any]:
+        """
+        Update the network keyword arguments and create a new features extractor object if needed.
+        If a ``features_extractor`` object is passed, then it will be shared.
+
+        :param net_kwargs: the base network keyword arguments, without the ones
+            related to features extractor
+        :param features_extractor: a features extractor object.
+            If None, a new object will be created.
+        :return: The updated keyword arguments
+        """
+        net_kwargs = net_kwargs.copy()
+        if features_extractor is None:
+            # The features extractor is not shared, create a new one
+            features_extractor = self.make_features_extractor()
+        net_kwargs.update(dict(features_extractor=features_extractor, features_dim=features_extractor.features_dim))
+        return net_kwargs
+
+    def make_features_extractor(self) -> BaseFeaturesExtractor:
+        """ Helper method to create a features extractor."""
+        return self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
+
     def extract_features(self, obs: th.Tensor) -> th.Tensor:
         """
         Preprocess the observation if needed and extract features.
@@ -89,7 +115,7 @@ class BaseModel(nn.Module, ABC):
         :param obs:
         :return:
         """
-        assert self.features_extractor is not None, "No feature extractor was set"
+        assert self.features_extractor is not None, "No features extractor was set"
         preprocessed_obs = preprocess_obs(obs, self.observation_space, normalize_images=self.normalize_images)
         return self.features_extractor(preprocessed_obs)
 
@@ -112,12 +138,12 @@ class BaseModel(nn.Module, ABC):
     @property
     def device(self) -> th.device:
         """Infer which device this policy lives on by inspecting its parameters.
-        If it has no parameters, the 'auto' device is used as a fallback.
+        If it has no parameters, the 'cpu' device is used as a fallback.
 
         :return:"""
         for param in self.parameters():
             return param.device
-        return get_device("auto")
+        return get_device("cpu")
 
     def save(self, path: str) -> None:
         """
@@ -234,7 +260,10 @@ class BasePolicy(BaseModel):
         #     state = self.initial_state
         # if mask is None:
         #     mask = [False for _ in range(self.n_envs)]
-        observation = np.array(observation)
+        if isinstance(observation, dict):
+            observation = ObsDictWrapper.convert_dict(observation)
+        else:
+            observation = np.array(observation)
 
         # Handle the different cases for images
         # as PyTorch use channel first format
@@ -326,7 +355,7 @@ class ActorCriticPolicy(BasePolicy):
         this allows to ensure boundaries when using gSDE.
     :param features_extractor_class: Features extractor to use.
     :param features_extractor_kwargs: Keyword arguments
-        to pass to the feature extractor.
+        to pass to the features extractor.
     :param normalize_images: Whether to normalize images or not,
          dividing by 255.0 (True by default)
     :param optimizer_class: The optimizer to use,
@@ -339,7 +368,7 @@ class ActorCriticPolicy(BasePolicy):
         self,
         observation_space: gym.spaces.Space,
         action_space: gym.spaces.Space,
-        lr_schedule: Callable[[float], float],
+        lr_schedule: Schedule,
         net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
         activation_fn: Type[nn.Module] = nn.Tanh,
         ortho_init: bool = True,
@@ -450,9 +479,11 @@ class ActorCriticPolicy(BasePolicy):
         # Note: If net_arch is None and some features extractor is used,
         #       net_arch here is an empty list and mlp_extractor does not
         #       really contain any layers (acts like an identity module).
-        self.mlp_extractor = MlpExtractor(self.features_dim, net_arch=self.net_arch, activation_fn=self.activation_fn)
+        self.mlp_extractor = MlpExtractor(
+            self.features_dim, net_arch=self.net_arch, activation_fn=self.activation_fn, device=self.device
+        )
 
-    def _build(self, lr_schedule: Callable[[float], float]) -> None:
+    def _build(self, lr_schedule: Schedule) -> None:
         """
         Create the networks and the optimizer.
 
@@ -463,7 +494,7 @@ class ActorCriticPolicy(BasePolicy):
 
         latent_dim_pi = self.mlp_extractor.latent_dim_pi
 
-        # Separate feature extractor for gSDE
+        # Separate features extractor for gSDE
         if self.sde_net_arch is not None:
             self.sde_features_extractor, latent_sde_dim = create_sde_features_extractor(
                 self.features_dim, self.sde_net_arch, self.activation_fn
@@ -493,7 +524,7 @@ class ActorCriticPolicy(BasePolicy):
         if self.ortho_init:
             # TODO: check for features_extractor
             # Values from stable-baselines.
-            # feature_extractor/mlp values are
+            # features_extractor/mlp values are
             # originally from openai/baselines (default gains/init_scales).
             module_gains = {
                 self.features_extractor: np.sqrt(2),
@@ -623,7 +654,7 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
         this allows to ensure boundaries when using gSDE.
     :param features_extractor_class: Features extractor to use.
     :param features_extractor_kwargs: Keyword arguments
-        to pass to the feature extractor.
+        to pass to the features extractor.
     :param normalize_images: Whether to normalize images or not,
          dividing by 255.0 (True by default)
     :param optimizer_class: The optimizer to use,
@@ -636,7 +667,7 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
         self,
         observation_space: gym.spaces.Space,
         action_space: gym.spaces.Space,
-        lr_schedule: Callable,
+        lr_schedule: Schedule,
         net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
         activation_fn: Type[nn.Module] = nn.Tanh,
         ortho_init: bool = True,
@@ -696,6 +727,8 @@ class ContinuousCritic(BaseModel):
     :param normalize_images: Whether to normalize images or not,
          dividing by 255.0 (True by default)
     :param n_critics: Number of critic networks to create.
+    :param share_features_extractor: Whether the features extractor is shared or not
+        between the actor and the critic (this saves computation time)
     """
 
     def __init__(
@@ -708,6 +741,7 @@ class ContinuousCritic(BaseModel):
         activation_fn: Type[nn.Module] = nn.ReLU,
         normalize_images: bool = True,
         n_critics: int = 2,
+        share_features_extractor: bool = True,
     ):
         super().__init__(
             observation_space,
@@ -718,6 +752,7 @@ class ContinuousCritic(BaseModel):
 
         action_dim = get_action_dim(self.action_space)
 
+        self.share_features_extractor = share_features_extractor
         self.n_critics = n_critics
         self.q_networks = []
         for idx in range(n_critics):
@@ -728,7 +763,8 @@ class ContinuousCritic(BaseModel):
 
     def forward(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, ...]:
         # Learn the features extractor using the policy loss only
-        with th.no_grad():
+        # when the features_extractor is shared with the actor
+        with th.set_grad_enabled(not self.share_features_extractor):
             features = self.extract_features(obs)
         qvalue_input = th.cat([features, actions], dim=1)
         return tuple(q_net(qvalue_input) for q_net in self.q_networks)

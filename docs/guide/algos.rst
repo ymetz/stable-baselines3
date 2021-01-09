@@ -11,6 +11,7 @@ Name         ``Box``     ``Discrete`` ``MultiDiscrete`` ``MultiBinary`` Multi Pr
 A2C          ✔️           ✔️            ✔️                 ✔️               ✔️
 DDPG         ✔️          ❌            ❌                ❌              ❌
 DQN          ❌           ✔️           ❌                ❌              ❌
+HER          ✔️            ✔️           ❌                ❌              ❌
 PPO          ✔️           ✔️            ✔️                 ✔️               ✔️
 SAC          ✔️          ❌            ❌                ❌              ❌
 TD3          ✔️          ❌            ❌                ❌              ❌
@@ -29,6 +30,10 @@ Actions ``gym.spaces``:
 -  ``MultiDiscrete``: A list of possible actions, where each timestep only one action of each discrete set can be used.
 - ``MultiBinary``: A list of possible actions, where each timestep any of the actions can be used in any combination.
 
+
+.. note::
+
+  More algorithms (like QR-DQN or TQC) are implemented in our :ref:`contrib repo <sb3_contrib>`.
 
 .. note::
 

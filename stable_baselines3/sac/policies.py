@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import gym
 import torch as th
@@ -7,7 +7,14 @@ from torch import nn
 from stable_baselines3.common.distributions import SquashedDiagGaussianDistribution, StateDependentNoiseDistribution
 from stable_baselines3.common.policies import BasePolicy, ContinuousCritic, create_sde_features_extractor, register_policy
 from stable_baselines3.common.preprocessing import get_action_dim
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, FlattenExtractor, NatureCNN, create_mlp
+from stable_baselines3.common.torch_layers import (
+    BaseFeaturesExtractor,
+    FlattenExtractor,
+    NatureCNN,
+    create_mlp,
+    get_actor_critic_arch,
+)
+from stable_baselines3.common.type_aliases import Schedule
 
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 2
@@ -84,7 +91,7 @@ class Actor(BasePolicy):
 
         if self.use_sde:
             latent_sde_dim = last_layer_dim
-            # Separate feature extractor for gSDE
+            # Separate features extractor for gSDE
             if sde_net_arch is not None:
                 self.sde_features_extractor, latent_sde_dim = create_sde_features_extractor(
                     features_dim, sde_net_arch, activation_fn
@@ -205,7 +212,7 @@ class SACPolicy(BasePolicy):
     :param clip_mean: Clip the mean output when using gSDE to avoid numerical instability.
     :param features_extractor_class: Features extractor to use.
     :param features_extractor_kwargs: Keyword arguments
-        to pass to the feature extractor.
+        to pass to the features extractor.
     :param normalize_images: Whether to normalize images or not,
          dividing by 255.0 (True by default)
     :param optimizer_class: The optimizer to use,
@@ -213,14 +220,16 @@ class SACPolicy(BasePolicy):
     :param optimizer_kwargs: Additional keyword arguments,
         excluding the learning rate, to pass to the optimizer
     :param n_critics: Number of critic networks to create.
+    :param share_features_extractor: Whether to share or not the features extractor
+        between the actor and the critic (this saves computation time)
     """
 
     def __init__(
         self,
         observation_space: gym.spaces.Space,
         action_space: gym.spaces.Space,
-        lr_schedule: Callable,
-        net_arch: Optional[List[int]] = None,
+        lr_schedule: Schedule,
+        net_arch: Optional[Union[List[int], Dict[str, List[int]]]] = None,
         activation_fn: Type[nn.Module] = nn.ReLU,
         use_sde: bool = False,
         log_std_init: float = -3,
@@ -233,6 +242,7 @@ class SACPolicy(BasePolicy):
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         n_critics: int = 2,
+        share_features_extractor: bool = True,
     ):
         super(SACPolicy, self).__init__(
             observation_space,
@@ -250,18 +260,14 @@ class SACPolicy(BasePolicy):
             else:
                 net_arch = []
 
-        # Create shared features extractor
-        self.features_extractor = features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
-        self.features_dim = self.features_extractor.features_dim
+        actor_arch, critic_arch = get_actor_critic_arch(net_arch)
 
         self.net_arch = net_arch
         self.activation_fn = activation_fn
         self.net_args = {
             "observation_space": self.observation_space,
             "action_space": self.action_space,
-            "features_extractor": self.features_extractor,
-            "features_dim": self.features_dim,
-            "net_arch": self.net_arch,
+            "net_arch": actor_arch,
             "activation_fn": self.activation_fn,
             "normalize_images": normalize_images,
         }
@@ -275,24 +281,39 @@ class SACPolicy(BasePolicy):
         }
         self.actor_kwargs.update(sde_kwargs)
         self.critic_kwargs = self.net_args.copy()
-        self.critic_kwargs.update({"n_critics": n_critics})
+        self.critic_kwargs.update(
+            {
+                "n_critics": n_critics,
+                "net_arch": critic_arch,
+                "share_features_extractor": share_features_extractor,
+            }
+        )
 
         self.actor, self.actor_target = None, None
         self.critic, self.critic_target = None, None
+        self.share_features_extractor = share_features_extractor
 
         self._build(lr_schedule)
 
-    def _build(self, lr_schedule: Callable) -> None:
+    def _build(self, lr_schedule: Schedule) -> None:
         self.actor = self.make_actor()
         self.actor.optimizer = self.optimizer_class(self.actor.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
 
-        self.critic = self.make_critic()
-        self.critic_target = self.make_critic()
+        if self.share_features_extractor:
+            self.critic = self.make_critic(features_extractor=self.actor.features_extractor)
+            # Do not optimize the shared features extractor with the critic loss
+            # otherwise, there are gradient computation issues
+            critic_parameters = [param for name, param in self.critic.named_parameters() if "features_extractor" not in name]
+        else:
+            # Create a separate features extractor for the critic
+            # this requires more memory and computation
+            self.critic = self.make_critic(features_extractor=None)
+            critic_parameters = self.critic.parameters()
+
+        # Critic target should not share the features extractor with critic
+        self.critic_target = self.make_critic(features_extractor=None)
         self.critic_target.load_state_dict(self.critic.state_dict())
-        # Do not optimize the shared feature extractor with the critic loss
-        # otherwise, there are gradient computation issues
-        # Another solution: having duplicated features extractor but requires more memory and computation
-        critic_parameters = [param for name, param in self.critic.named_parameters() if "features_extractor" not in name]
+
         self.critic.optimizer = self.optimizer_class(critic_parameters, lr=lr_schedule(1), **self.optimizer_kwargs)
 
     def _get_data(self) -> Dict[str, Any]:
@@ -300,7 +321,7 @@ class SACPolicy(BasePolicy):
 
         data.update(
             dict(
-                net_arch=self.net_args["net_arch"],
+                net_arch=self.net_arch,
                 activation_fn=self.net_args["activation_fn"],
                 use_sde=self.actor_kwargs["use_sde"],
                 log_std_init=self.actor_kwargs["log_std_init"],
@@ -325,11 +346,13 @@ class SACPolicy(BasePolicy):
         """
         self.actor.reset_noise(batch_size=batch_size)
 
-    def make_actor(self) -> Actor:
-        return Actor(**self.actor_kwargs).to(self.device)
+    def make_actor(self, features_extractor: Optional[BaseFeaturesExtractor] = None) -> Actor:
+        actor_kwargs = self._update_features_extractor(self.actor_kwargs, features_extractor)
+        return Actor(**actor_kwargs).to(self.device)
 
-    def make_critic(self) -> ContinuousCritic:
-        return ContinuousCritic(**self.critic_kwargs).to(self.device)
+    def make_critic(self, features_extractor: Optional[BaseFeaturesExtractor] = None) -> ContinuousCritic:
+        critic_kwargs = self._update_features_extractor(self.critic_kwargs, features_extractor)
+        return ContinuousCritic(**critic_kwargs).to(self.device)
 
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
         return self._predict(obs, deterministic=deterministic)
@@ -367,14 +390,16 @@ class CnnPolicy(SACPolicy):
     :param optimizer_kwargs: Additional keyword arguments,
         excluding the learning rate, to pass to the optimizer
     :param n_critics: Number of critic networks to create.
+    :param share_features_extractor: Whether to share or not the features extractor
+        between the actor and the critic (this saves computation time)
     """
 
     def __init__(
         self,
         observation_space: gym.spaces.Space,
         action_space: gym.spaces.Space,
-        lr_schedule: Callable,
-        net_arch: Optional[List[int]] = None,
+        lr_schedule: Schedule,
+        net_arch: Optional[Union[List[int], Dict[str, List[int]]]] = None,
         activation_fn: Type[nn.Module] = nn.ReLU,
         use_sde: bool = False,
         log_std_init: float = -3,
@@ -387,6 +412,7 @@ class CnnPolicy(SACPolicy):
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         n_critics: int = 2,
+        share_features_extractor: bool = True,
     ):
         super(CnnPolicy, self).__init__(
             observation_space,
@@ -405,6 +431,7 @@ class CnnPolicy(SACPolicy):
             optimizer_class,
             optimizer_kwargs,
             n_critics,
+            share_features_extractor,
         )
 
 

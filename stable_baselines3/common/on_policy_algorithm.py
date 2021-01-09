@@ -1,5 +1,5 @@
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import gym
 import numpy as np
@@ -10,7 +10,7 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.policies import ActorCriticPolicy
-from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback
+from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import safe_mean
 from stable_baselines3.common.vec_env import VecEnv
 
@@ -46,13 +46,14 @@ class OnPolicyAlgorithm(BaseAlgorithm):
     :param device: Device (cpu, cuda, ...) on which the code should be run.
         Setting it to auto, the code will be run on the GPU if possible.
     :param _init_setup_model: Whether or not to build the network at the creation of the instance
+    :param supported_action_spaces: The action spaces supported by the algorithm.
     """
 
     def __init__(
         self,
         policy: Union[str, Type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
-        learning_rate: Union[float, Callable],
+        learning_rate: Union[float, Schedule],
         n_steps: int,
         gamma: float,
         gae_lambda: float,
@@ -69,6 +70,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
+        supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
     ):
 
         super(OnPolicyAlgorithm, self).__init__(
@@ -85,6 +87,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             support_multi_env=True,
             seed=seed,
             tensorboard_log=tensorboard_log,
+            supported_action_spaces=supported_action_spaces,
         )
 
         self.n_steps = n_steps
@@ -124,7 +127,9 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self, env: VecEnv, callback: BaseCallback, rollout_buffer: RolloutBuffer, n_rollout_steps: int
     ) -> bool:
         """
-        Collect rollouts using the current policy and fill a `RolloutBuffer`.
+        Collect experiences using the current policy and fill a ``RolloutBuffer``.
+        The term rollout here refers to the model-free notion and should not
+        be used with the concept of rollout used in model-based RL or planning.
 
         :param env: The training environment
         :param callback: Callback that will be called at each step
@@ -179,7 +184,12 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self._last_obs = new_obs
             self._last_dones = dones
 
-        rollout_buffer.compute_returns_and_advantage(values, dones=dones)
+        with th.no_grad():
+            # Compute value for the last timestep
+            obs_tensor = th.as_tensor(new_obs).to(self.device)
+            _, values, _ = self.policy.forward(obs_tensor)
+
+        rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
         callback.on_rollout_end()
 

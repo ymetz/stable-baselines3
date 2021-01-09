@@ -3,10 +3,10 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to Stable Baselines3 docs! - RL Baselines Made Easy
-===========================================================
+Stable-Baselines3 Docs - Reliable Reinforcement Learning Implementations
+========================================================================
 
-`Stable Baselines3 <https://github.com/DLR-RM/stable-baselines3>`_ is a set of improved implementations of reinforcement learning algorithms in PyTorch.
+`Stable Baselines3 (SB3) <https://github.com/DLR-RM/stable-baselines3>`_ is a set of reliable implementations of reinforcement learning algorithms in PyTorch.
 It is the next major version of `Stable Baselines <https://github.com/hill-a/stable-baselines>`_.
 
 
@@ -15,6 +15,8 @@ Github repository: https://github.com/DLR-RM/stable-baselines3
 RL Baselines3 Zoo (collection of pre-trained agents): https://github.com/DLR-RM/rl-baselines3-zoo
 
 RL Baselines3 Zoo also offers a simple interface to train, evaluate agents and do hyperparameter tuning.
+
+SB3 Contrib (experimental RL code, latest algorithms): https://github.com/Stable-Baselines-Team/stable-baselines3-contrib
 
 
 Main Features
@@ -26,6 +28,7 @@ Main Features
 - Tests, high code coverage and type hints
 - Clean code
 - Tensorboard support
+- **The performance of each algorithm was tested** (see *Results* section in their respective page)
 
 
 .. toctree::
@@ -44,9 +47,13 @@ Main Features
    guide/callbacks
    guide/tensorboard
    guide/rl_zoo
+   guide/sb3_contrib
+   guide/imitation
    guide/migration
    guide/checking_nan
    guide/developer
+   guide/save_format
+   guide/export
 
 
 .. toctree::
@@ -57,6 +64,7 @@ Main Features
   modules/a2c
   modules/ddpg
   modules/dqn
+  modules/her
   modules/ppo
   modules/sac
   modules/td3
@@ -66,7 +74,7 @@ Main Features
   :caption: Common
 
   common/atari_wrappers
-  common/cmd_util
+  common/env_util
   common/distributions
   common/evaluation
   common/env_checker

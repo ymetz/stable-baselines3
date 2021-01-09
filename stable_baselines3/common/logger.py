@@ -5,11 +5,12 @@ import sys
 import tempfile
 import warnings
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, TextIO, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, TextIO, Tuple, Union
 
 import numpy as np
 import pandas
 import torch as th
+from matplotlib import pyplot as plt
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -21,6 +22,59 @@ INFO = 20
 WARN = 30
 ERROR = 40
 DISABLED = 50
+
+
+class Video(object):
+    """
+    Video data class storing the video frames and the frame per seconds
+
+    :param frames: frames to create the video from
+    :param fps: frames per second
+    """
+
+    def __init__(self, frames: th.Tensor, fps: Union[float, int]):
+        self.frames = frames
+        self.fps = fps
+
+
+class Figure(object):
+    """
+    Figure data class storing a matplotlib figure and whether to close the figure after logging it
+
+    :param figure: figure to log
+    :param close: if true, close the figure after logging it
+    """
+
+    def __init__(self, figure: plt.figure, close: bool):
+        self.figure = figure
+        self.close = close
+
+
+class Image(object):
+    """
+    Image data class storing an image and data format
+
+    :param image: image to log
+    :param dataformats: Image data format specification of the form NCHW, NHWC, CHW, HWC, HW, WH, etc.
+        More info in add_image method doc at https://pytorch.org/docs/stable/tensorboard.html
+        Gym envs normally use 'HWC' (channel last)
+    """
+
+    def __init__(self, image: Union[th.Tensor, np.ndarray, str], dataformats: str):
+        self.image = image
+        self.dataformats = dataformats
+
+
+class FormatUnsupportedError(NotImplementedError):
+    def __init__(self, unsupported_formats: Sequence[str], value_description: str):
+        if len(unsupported_formats) > 1:
+            format_str = f"formats {', '.join(unsupported_formats)} are"
+        else:
+            format_str = f"format {unsupported_formats[0]} is"
+        super(FormatUnsupportedError, self).__init__(
+            f"The {format_str} not supported for the {value_description} value logged.\n"
+            f"You can exclude formats via the `exclude` parameter of the logger's `record` function."
+        )
 
 
 class KVWriter(object):
@@ -80,8 +134,17 @@ class HumanOutputFormat(KVWriter, SeqWriter):
         tag = None
         for (key, value), (_, excluded) in zip(sorted(key_values.items()), sorted(key_excluded.items())):
 
-            if excluded is not None and "stdout" in excluded:
+            if excluded is not None and ("stdout" in excluded or "log" in excluded):
                 continue
+
+            if isinstance(value, Video):
+                raise FormatUnsupportedError(["stdout", "log"], "video")
+
+            if isinstance(value, Figure):
+                raise FormatUnsupportedError(["stdout", "log"], "figure")
+
+            if isinstance(value, Image):
+                raise FormatUnsupportedError(["stdout", "log"], "image")
 
             if isinstance(value, float):
                 # Align left
@@ -140,6 +203,24 @@ class HumanOutputFormat(KVWriter, SeqWriter):
             self.file.close()
 
 
+def filter_excluded_keys(
+    key_values: Dict[str, Any], key_excluded: Dict[str, Union[str, Tuple[str, ...]]], _format: str
+) -> Dict[str, Any]:
+    """
+    Filters the keys specified by ``key_exclude`` for the specified format
+
+    :param key_values: log dictionary to be filtered
+    :param key_excluded: keys to be excluded per format
+    :param _format: format for which this filter is run
+    :return: dict without the excluded keys
+    """
+
+    def is_excluded(key: str) -> bool:
+        return key in key_excluded and key_excluded[key] is not None and _format in key_excluded[key]
+
+    return {key: value for key, value in key_values.items() if not is_excluded(key)}
+
+
 class JSONOutputFormat(KVWriter):
     def __init__(self, filename: str):
         """
@@ -150,18 +231,26 @@ class JSONOutputFormat(KVWriter):
         self.file = open(filename, "wt")
 
     def write(self, key_values: Dict[str, Any], key_excluded: Dict[str, Union[str, Tuple[str, ...]]], step: int = 0) -> None:
-        for (key, value), (_, excluded) in zip(sorted(key_values.items()), sorted(key_excluded.items())):
-
-            if excluded is not None and "json" in excluded:
-                continue
-
+        def cast_to_json_serializable(value: Any):
+            if isinstance(value, Video):
+                raise FormatUnsupportedError(["json"], "video")
+            if isinstance(value, Figure):
+                raise FormatUnsupportedError(["json"], "figure")
+            if isinstance(value, Image):
+                raise FormatUnsupportedError(["json"], "image")
             if hasattr(value, "dtype"):
                 if value.shape == () or len(value) == 1:
                     # if value is a dimensionless numpy array or of length 1, serialize as a float
-                    key_values[key] = float(value)
+                    return float(value)
                 else:
                     # otherwise, a value is a numpy array, serialize as a list or nested lists
-                    key_values[key] = value.tolist()
+                    return value.tolist()
+            return value
+
+        key_values = {
+            key: cast_to_json_serializable(value)
+            for key, value in filter_excluded_keys(key_values, key_excluded, "json").items()
+        }
         self.file.write(json.dumps(key_values) + "\n")
         self.file.flush()
 
@@ -187,6 +276,7 @@ class CSVOutputFormat(KVWriter):
 
     def write(self, key_values: Dict[str, Any], key_excluded: Dict[str, Union[str, Tuple[str, ...]]], step: int = 0) -> None:
         # Add our current row to the history
+        key_values = filter_excluded_keys(key_values, key_excluded, "csv")
         extra_keys = key_values.keys() - self.keys
         if extra_keys:
             self.keys.extend(extra_keys)
@@ -206,6 +296,16 @@ class CSVOutputFormat(KVWriter):
             if i > 0:
                 self.file.write(",")
             value = key_values.get(key)
+
+            if isinstance(value, Video):
+                raise FormatUnsupportedError(["csv"], "video")
+
+            if isinstance(value, Figure):
+                raise FormatUnsupportedError(["csv"], "figure")
+
+            if isinstance(value, Image):
+                raise FormatUnsupportedError(["csv"], "image")
+
             if value is not None:
                 self.file.write(str(value))
         self.file.write("\n")
@@ -240,6 +340,15 @@ class TensorBoardOutputFormat(KVWriter):
 
             if isinstance(value, th.Tensor):
                 self.writer.add_histogram(key, value, step)
+
+            if isinstance(value, Video):
+                self.writer.add_video(key, value.frames, step, value.fps)
+
+            if isinstance(value, Figure):
+                self.writer.add_figure(key, value.figure, step, close=value.close)
+
+            if isinstance(value, Image):
+                self.writer.add_image(key, value.image, step, dataformats=value.dataformats)
 
         # Flush the output to the file
         self.writer.flush()

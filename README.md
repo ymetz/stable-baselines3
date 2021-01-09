@@ -8,7 +8,7 @@
 
 # Stable Baselines3
 
-Stable Baselines3 is a set of improved implementations of reinforcement learning algorithms in PyTorch. It is the next major version of [Stable Baselines](https://github.com/hill-a/stable-baselines).
+Stable Baselines3 (SB3) is a set of reliable implementations of reinforcement learning algorithms in PyTorch. It is the next major version of [Stable Baselines](https://github.com/hill-a/stable-baselines).
 
 You can read a detailed presentation of Stable Baselines in the [Medium article](https://medium.com/@araffin/stable-baselines-a-fork-of-openai-baselines-reinforcement-learning-made-easy-df87c4b2fc82).
 
@@ -18,6 +18,9 @@ These algorithms will make it easier for the research community and industry to 
 **Note: despite its simplicity of use, Stable Baselines3 (SB3) assumes you have some knowledge about Reinforcement Learning (RL).** You should not utilize this library without some practice. To that extent, we provide good resources in the [documentation](https://stable-baselines3.readthedocs.io/en/master/guide/rl.html) to get started with RL.
 
 ## Main Features
+
+**The performance of each algorithm was tested** (see *Results* section in their respective page),
+you can take a look at the issues [#48](https://github.com/DLR-RM/stable-baselines3/issues/48) and [#49](https://github.com/DLR-RM/stable-baselines3/issues/49) for more details.
 
 
 | **Features**                | **Stable-Baselines3** |
@@ -35,20 +38,9 @@ These algorithms will make it easier for the research community and industry to 
 | Type hints                  | :heavy_check_mark: |
 
 
-### Roadmap to V1.0
-
-Please look at the issue for more details.
-Planned features:
-
-- [ ] HER
-
 ### Planned features (v1.1+)
 
-- [ ] DQN extensions (prioritized replay, double q-learning, ...)
-- [ ] Support for `Tuple` and `Dict` observation spaces
-- [ ] Recurrent Policies
-- [ ] TRPO
-
+Please take a look at the [Roadmap](https://github.com/DLR-RM/stable-baselines3/issues/1) and [Milestones](https://github.com/DLR-RM/stable-baselines3/milestones).
 
 ## Migration guide: from Stable-Baselines (SB2) to Stable-Baselines3 (SB3)
 
@@ -57,7 +49,6 @@ A migration guide from SB2 to SB3 can be found in the [documentation](https://st
 ## Documentation
 
 Documentation is available online: [https://stable-baselines3.readthedocs.io/](https://stable-baselines3.readthedocs.io/)
-
 
 ## RL Baselines3 Zoo: A Collection of Trained RL Agents
 
@@ -75,6 +66,15 @@ Goals of this repository:
 Github repo: https://github.com/DLR-RM/rl-baselines3-zoo
 
 Documentation: https://stable-baselines3.readthedocs.io/en/master/guide/rl_zoo.html
+
+## SB3-Contrib: Experimental RL Features
+
+We implement experimental features in a separate contrib repository: [SB3-Contrib](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib)
+
+This allows SB3 to maintain a stable and compact core, while still providing the latest features, like Truncated Quantile Critics (TQC) or Quantile Regression DQN (QR-DQN).
+
+Documentation is available online: [https://sb3-contrib.readthedocs.io/](https://sb3-contrib.readthedocs.io/)
+
 
 ## Installation
 
@@ -161,6 +161,7 @@ All the following examples can be executed online using Google colab notebooks:
 | A2C   | :x: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark:                |
 | DDPG  | :x: | :heavy_check_mark: | :x:                | :x:                 | :x:                | :x:                               |
 | DQN   | :x: | :x: | :heavy_check_mark: | :x:                 | :x:                | :x:                               |
+| HER   | :x: | :heavy_check_mark: | :heavy_check_mark: | :x:                 | :x:                | :x:                               |
 | PPO   | :x: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark:  | :heavy_check_mark: | :heavy_check_mark:                |
 | SAC   | :x: | :heavy_check_mark: | :x:                | :x:                 | :x:                | :x:                               |
 | TD3   | :x: | :heavy_check_mark: | :x:                | :x:                 | :x:                | :x:                               |
@@ -215,7 +216,7 @@ To cite this repository in publications:
 
 ## Maintainers
 
-Stable-Baselines3 is currently maintained by [Ashley Hill](https://github.com/hill-a) (aka @hill-a), [Antonin Raffin](https://araffin.github.io/) (aka [@araffin](https://github.com/araffin)), [Maximilian Ernestus](https://github.com/erniejunior) (aka @erniejunior), [Adam Gleave](https://github.com/adamgleave) (@AdamGleave) and [Anssi Kanervisto](https://github.com/Miffyli) (@Miffyli).
+Stable-Baselines3 is currently maintained by [Ashley Hill](https://github.com/hill-a) (aka @hill-a), [Antonin Raffin](https://araffin.github.io/) (aka [@araffin](https://github.com/araffin)), [Maximilian Ernestus](https://github.com/ernestum) (aka @ernestum), [Adam Gleave](https://github.com/adamgleave) (@AdamGleave) and [Anssi Kanervisto](https://github.com/Miffyli) (@Miffyli).
 
 **Important Note: We do not do technical support, nor consulting** and don't answer personal questions per email.
 

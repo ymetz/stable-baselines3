@@ -8,11 +8,11 @@ import torch as th
 
 from stable_baselines3 import A2C
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv
-from stable_baselines3.common.cmd_util import make_atari_env, make_vec_env
+from stable_baselines3.common.env_util import is_wrapped, make_atari_env, make_vec_env, unwrap_wrapper
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.noise import ActionNoise, OrnsteinUhlenbeckActionNoise, VectorizedActionNoise
-from stable_baselines3.common.utils import polyak_update
+from stable_baselines3.common.utils import polyak_update, zip_strict
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 
@@ -63,6 +63,38 @@ def test_make_atari_env(env_id, n_envs, wrapper_kwargs):
         assert wrapped_atari_env.observation_space.shape == (84, 84, 1)
         assert isinstance(wrapped_atari_env.env, ClipRewardEnv)
         assert np.max(np.abs(reward)) < 1.0
+
+
+def test_vec_env_kwargs():
+    env = make_vec_env("MountainCarContinuous-v0", n_envs=1, seed=0, env_kwargs={"goal_velocity": 0.11})
+    assert env.get_attr("goal_velocity")[0] == 0.11
+
+
+def test_vec_env_monitor_kwargs():
+    env = make_vec_env("MountainCarContinuous-v0", n_envs=1, seed=0, monitor_kwargs={"allow_early_resets": False})
+    assert env.get_attr("allow_early_resets")[0] is False
+
+    env = make_atari_env("BreakoutNoFrameskip-v4", n_envs=1, seed=0, monitor_kwargs={"allow_early_resets": False})
+    assert env.get_attr("allow_early_resets")[0] is False
+
+    env = make_vec_env("MountainCarContinuous-v0", n_envs=1, seed=0, monitor_kwargs={"allow_early_resets": True})
+    assert env.get_attr("allow_early_resets")[0] is True
+
+    env = make_atari_env("BreakoutNoFrameskip-v4", n_envs=1, seed=0, monitor_kwargs={"allow_early_resets": True})
+    assert env.get_attr("allow_early_resets")[0] is True
+
+
+def test_env_auto_monitor_wrap():
+    env = gym.make("Pendulum-v0")
+    model = A2C("MlpPolicy", env)
+    assert model.env.env_is_wrapped(Monitor)[0] is True
+
+    env = Monitor(env)
+    model = A2C("MlpPolicy", env)
+    assert model.env.env_is_wrapped(Monitor)[0] is True
+
+    model = A2C("MlpPolicy", "Pendulum-v0")
+    assert model.env.env_is_wrapped(Monitor)[0] is True
 
 
 def test_custom_vec_env(tmp_path):
@@ -122,6 +154,103 @@ def test_evaluate_policy():
     episode_rewards, _ = evaluate_policy(model, model.get_env(), n_eval_episodes, return_episode_rewards=True)
     assert len(episode_rewards) == n_eval_episodes
 
+    # Test that warning is given about no monitor
+    eval_env = gym.make("Pendulum-v0")
+    with pytest.warns(UserWarning):
+        _ = evaluate_policy(model, eval_env, n_eval_episodes)
+
+
+class ZeroRewardWrapper(gym.RewardWrapper):
+    def reward(self, reward):
+        return reward * 0
+
+
+class AlwaysDoneWrapper(gym.Wrapper):
+    # Pretends that environment only has single step for each
+    # episode.
+    def __init__(self, env):
+        super(AlwaysDoneWrapper, self).__init__(env)
+        self.last_obs = None
+        self.needs_reset = True
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        self.needs_reset = done
+        self.last_obs = obs
+        return obs, reward, True, info
+
+    def reset(self, **kwargs):
+        if self.needs_reset:
+            obs = self.env.reset(**kwargs)
+            self.last_obs = obs
+            self.needs_reset = False
+        return self.last_obs
+
+
+@pytest.mark.parametrize("vec_env_class", [None, DummyVecEnv, SubprocVecEnv])
+def test_evaluate_policy_monitors(vec_env_class):
+    # Test that results are correct with monitor environments.
+    # Also test VecEnvs
+    n_eval_episodes = 2
+    env_id = "CartPole-v0"
+    model = A2C("MlpPolicy", env_id, seed=0)
+
+    def make_eval_env(with_monitor, wrapper_class=gym.Wrapper):
+        # Make eval environment with or without monitor in root,
+        # and additionally wrapped with another wrapper (after Monitor).
+        env = None
+        if vec_env_class is None:
+            # No vecenv, traditional env
+            env = gym.make(env_id)
+            if with_monitor:
+                env = Monitor(env)
+            env = wrapper_class(env)
+        else:
+            if with_monitor:
+                env = vec_env_class([lambda: wrapper_class(Monitor(gym.make(env_id)))])
+            else:
+                env = vec_env_class([lambda: wrapper_class(gym.make(env_id))])
+        return env
+
+    # Test that evaluation with VecEnvs works as expected
+    eval_env = make_eval_env(with_monitor=True)
+    _ = evaluate_policy(model, eval_env, n_eval_episodes)
+    eval_env.close()
+
+    # Warning without Monitor
+    eval_env = make_eval_env(with_monitor=False)
+    with pytest.warns(UserWarning):
+        _ = evaluate_policy(model, eval_env, n_eval_episodes)
+    eval_env.close()
+
+    # Test that we gather correct reward with Monitor wrapper
+    # Sanity check that we get zero-reward without Monitor
+    eval_env = make_eval_env(with_monitor=False, wrapper_class=ZeroRewardWrapper)
+    average_reward, _ = evaluate_policy(model, eval_env, n_eval_episodes, warn=False)
+    assert average_reward == 0.0, "ZeroRewardWrapper wrapper for testing did not work"
+    eval_env.close()
+
+    # Should get non-zero-rewards with Monitor (true reward)
+    eval_env = make_eval_env(with_monitor=True, wrapper_class=ZeroRewardWrapper)
+    average_reward, _ = evaluate_policy(model, eval_env, n_eval_episodes)
+    assert average_reward > 0.0, "evaluate_policy did not get reward from Monitor"
+    eval_env.close()
+
+    # Test that we also track correct episode dones, not the wrapped ones.
+    # Sanity check that we get only one step per episode.
+    eval_env = make_eval_env(with_monitor=False, wrapper_class=AlwaysDoneWrapper)
+    episode_rewards, episode_lengths = evaluate_policy(
+        model, eval_env, n_eval_episodes, return_episode_rewards=True, warn=False
+    )
+    assert all(map(lambda l: l == 1, episode_lengths)), "AlwaysDoneWrapper did not fix episode lengths to one"
+    eval_env.close()
+
+    # Should get longer episodes with with Monitor (true episodes)
+    eval_env = make_eval_env(with_monitor=True, wrapper_class=AlwaysDoneWrapper)
+    episode_rewards, episode_lengths = evaluate_policy(model, eval_env, n_eval_episodes, return_episode_rewards=True)
+    assert all(map(lambda l: l > 1, episode_lengths)), "evaluate_policy did not get episode lengths from Monitor"
+    eval_env.close()
+
 
 def test_vec_noise():
     num_envs = 4
@@ -167,3 +296,40 @@ def test_polyak():
 
     assert th.allclose(param1, target1)
     assert th.allclose(param2, target2)
+
+
+def test_zip_strict():
+    # Iterables with different lengths
+    list_a = [0, 1]
+    list_b = [1, 2, 3]
+    # zip does not raise any error
+    for _, _ in zip(list_a, list_b):
+        pass
+
+    # zip_strict does raise an error
+    with pytest.raises(ValueError):
+        for _, _ in zip_strict(list_a, list_b):
+            pass
+
+    # same length, should not raise an error
+    for _, _ in zip_strict(list_a, list_b[: len(list_a)]):
+        pass
+
+
+def test_cmd_util_rename():
+    """Test that importing cmd_util still works but raises warning"""
+    with pytest.warns(FutureWarning):
+        from stable_baselines3.common.cmd_util import make_vec_env  # noqa: F401
+
+
+def test_is_wrapped():
+    """Test that is_wrapped correctly detects wraps"""
+    env = gym.make("Pendulum-v0")
+    env = gym.Wrapper(env)
+    assert not is_wrapped(env, Monitor)
+    monitor_env = Monitor(env)
+    assert is_wrapped(monitor_env, Monitor)
+    env = gym.Wrapper(monitor_env)
+    assert is_wrapped(env, Monitor)
+    # Test that unwrap works as expected
+    assert unwrap_wrapper(env, Monitor) == monitor_env

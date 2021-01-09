@@ -2,7 +2,8 @@ import glob
 import os
 import random
 from collections import deque
-from typing import Callable, Iterable, Optional, Union
+from itertools import zip_longest
+from typing import Iterable, Optional, Union
 
 import gym
 import numpy as np
@@ -15,9 +16,7 @@ except ImportError:
     SummaryWriter = None
 
 from stable_baselines3.common import logger
-from stable_baselines3.common.preprocessing import is_image_space
-from stable_baselines3.common.type_aliases import GymEnv
-from stable_baselines3.common.vec_env import VecTransposeImage
+from stable_baselines3.common.type_aliases import GymEnv, Schedule
 
 
 def set_random_seed(seed: int, using_cuda: bool = False) -> None:
@@ -71,7 +70,7 @@ def update_learning_rate(optimizer: th.optim.Optimizer, learning_rate: float) ->
         param_group["lr"] = learning_rate
 
 
-def get_schedule_fn(value_schedule: Union[Callable, float]) -> Callable:
+def get_schedule_fn(value_schedule: Union[Schedule, float, int]) -> Schedule:
     """
     Transform (if needed) learning rate and clip range (for PPO)
     to callable.
@@ -89,7 +88,7 @@ def get_schedule_fn(value_schedule: Union[Callable, float]) -> Callable:
     return value_schedule
 
 
-def get_linear_fn(start: float, end: float, end_fraction: float) -> Callable:
+def get_linear_fn(start: float, end: float, end_fraction: float) -> Schedule:
     """
     Create a function that interpolates linearly between start and end
     between ``progress_remaining`` = 1 and ``progress_remaining`` = ``end_fraction``.
@@ -113,7 +112,7 @@ def get_linear_fn(start: float, end: float, end_fraction: float) -> Callable:
     return func
 
 
-def constant_fn(val: float) -> Callable:
+def constant_fn(val: float) -> Schedule:
     """
     Create a function that returns a constant
     It is useful for learning rate schedule (to avoid code duplication)
@@ -203,14 +202,7 @@ def check_for_correct_spaces(env: GymEnv, observation_space: gym.spaces.Space, a
     :param observation_space: Observation space to check against
     :param action_space: Action space to check against
     """
-    if (
-        observation_space != env.observation_space
-        # Special cases for images that need to be transposed
-        and not (
-            is_image_space(env.observation_space)
-            and observation_space == VecTransposeImage.transpose_space(env.observation_space)
-        )
-    ):
+    if observation_space != env.observation_space:
         raise ValueError(f"Observation spaces do not match: {observation_space} != {env.observation_space}")
     if action_space != env.action_space:
         raise ValueError(f"Action spaces do not match: {action_space} != {env.action_space}")
@@ -286,6 +278,24 @@ def safe_mean(arr: Union[np.ndarray, list, deque]) -> np.ndarray:
     return np.nan if len(arr) == 0 else np.mean(arr)
 
 
+def zip_strict(*iterables: Iterable) -> Iterable:
+    r"""
+    ``zip()`` function but enforces that iterables are of equal length.
+    Raises ``ValueError`` if iterables not of equal length.
+    Code inspired by Stackoverflow answer for question #32954486.
+
+    :param \*iterables: iterables to ``zip()``
+    """
+    # As in Stackoverflow #32954486, use
+    # new object for "empty" in case we have
+    # Nones in iterable.
+    sentinel = object()
+    for combo in zip_longest(*iterables, fillvalue=sentinel):
+        if sentinel in combo:
+            raise ValueError("Iterables have different lengths")
+        yield combo
+
+
 def polyak_update(params: Iterable[th.nn.Parameter], target_params: Iterable[th.nn.Parameter], tau: float) -> None:
     """
     Perform a Polyak average update on ``target_params`` using ``params``:
@@ -303,6 +313,7 @@ def polyak_update(params: Iterable[th.nn.Parameter], target_params: Iterable[th.
     :param tau: the soft update coefficient ("Polyak update", between 0 and 1)
     """
     with th.no_grad():
-        for param, target_param in zip(params, target_params):
+        # zip does not raise an exception if length of parameters does not match.
+        for param, target_param in zip_strict(params, target_params):
             target_param.data.mul_(1 - tau)
             th.add(target_param.data, param.data, alpha=tau, out=target_param.data)

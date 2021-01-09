@@ -5,7 +5,7 @@ import pathlib
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
 
 import gym
 import numpy as np
@@ -13,12 +13,13 @@ import torch as th
 
 from stable_baselines3.common import logger, utils
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, ConvertCallback, EvalCallback
+from stable_baselines3.common.env_util import is_wrapped
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.policies import BasePolicy, get_policy_from_name
-from stable_baselines3.common.preprocessing import is_image_space
+from stable_baselines3.common.preprocessing import is_image_space, is_image_space_channels_first
 from stable_baselines3.common.save_util import load_from_zip_file, recursive_getattr, recursive_setattr, save_to_zip_file
-from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback
+from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import (
     check_for_correct_spaces,
     get_device,
@@ -26,14 +27,21 @@ from stable_baselines3.common.utils import (
     set_random_seed,
     update_learning_rate,
 )
-from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecNormalize, VecTransposeImage, unwrap_vec_normalize
+from stable_baselines3.common.vec_env import (
+    DummyVecEnv,
+    VecEnv,
+    VecNormalize,
+    VecTransposeImage,
+    is_vecenv_wrapped,
+    unwrap_vec_normalize,
+)
+from stable_baselines3.common.vec_env.obs_dict_wrapper import ObsDictWrapper
 
 
-def maybe_make_env(env: Union[GymEnv, str, None], monitor_wrapper: bool, verbose: int) -> Optional[GymEnv]:
+def maybe_make_env(env: Union[GymEnv, str, None], verbose: int) -> Optional[GymEnv]:
     """If env is a string, make the environment; otherwise, return env.
 
     :param env: The environment to learn from.
-    :param monitor_wrapper: Whether to wrap env in a Monitor when creating env.
     :param verbose: logging verbosity
     :return A Gym (vector) environment.
     """
@@ -41,9 +49,6 @@ def maybe_make_env(env: Union[GymEnv, str, None], monitor_wrapper: bool, verbose
         if verbose >= 1:
             print(f"Creating environment from the given name '{env}'")
         env = gym.make(env)
-        if monitor_wrapper:
-            env = Monitor(env, filename=None)
-
     return env
 
 
@@ -74,6 +79,7 @@ class BaseAlgorithm(ABC):
         instead of action noise exploration (default: False)
     :param sde_sample_freq: Sample a new noise matrix every n steps when using gSDE
         Default: -1 (only sample at the beginning of the rollout)
+    :param supported_action_spaces: The action spaces supported by the algorithm.
     """
 
     def __init__(
@@ -81,7 +87,7 @@ class BaseAlgorithm(ABC):
         policy: Type[BasePolicy],
         env: Union[GymEnv, str, None],
         policy_base: Type[BasePolicy],
-        learning_rate: Union[float, Callable],
+        learning_rate: Union[float, Schedule],
         policy_kwargs: Dict[str, Any] = None,
         tensorboard_log: Optional[str] = None,
         verbose: int = 0,
@@ -92,6 +98,7 @@ class BaseAlgorithm(ABC):
         seed: Optional[int] = None,
         use_sde: bool = False,
         sde_sample_freq: int = -1,
+        supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
     ):
 
         if isinstance(policy, str) and policy_base is not None:
@@ -121,7 +128,7 @@ class BaseAlgorithm(ABC):
         self.policy = None
         self.learning_rate = learning_rate
         self.tensorboard_log = tensorboard_log
-        self.lr_schedule = None  # type: Optional[Callable]
+        self.lr_schedule = None  # type: Optional[Schedule]
         self._last_obs = None  # type: Optional[np.ndarray]
         self._last_dones = None  # type: Optional[np.ndarray]
         # When using VecNormalize:
@@ -143,34 +150,64 @@ class BaseAlgorithm(ABC):
         if env is not None:
             if isinstance(env, str):
                 if create_eval_env:
-                    self.eval_env = maybe_make_env(env, monitor_wrapper, self.verbose)
+                    self.eval_env = maybe_make_env(env, self.verbose)
 
-            env = maybe_make_env(env, monitor_wrapper, self.verbose)
-            env = self._wrap_env(env)
+            env = maybe_make_env(env, self.verbose)
+            env = self._wrap_env(env, self.verbose, monitor_wrapper)
 
             self.observation_space = env.observation_space
             self.action_space = env.action_space
             self.n_envs = env.num_envs
             self.env = env
 
+            if supported_action_spaces is not None:
+                assert isinstance(self.action_space, supported_action_spaces), (
+                    f"The algorithm only supports {supported_action_spaces} as action spaces "
+                    f"but {self.action_space} was provided"
+                )
+
             if not support_multi_env and self.n_envs > 1:
                 raise ValueError(
                     "Error: the model does not support multiple envs; it requires " "a single vectorized environment."
                 )
 
-        if self.use_sde and not isinstance(self.observation_space, gym.spaces.Box):
-            raise ValueError("generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
+            if self.use_sde and not isinstance(self.action_space, gym.spaces.Box):
+                raise ValueError("generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
 
-    def _wrap_env(self, env: GymEnv) -> VecEnv:
+    @staticmethod
+    def _wrap_env(env: GymEnv, verbose: int = 0, monitor_wrapper: bool = True) -> VecEnv:
+        """ "
+        Wrap environment with the appropriate wrappers if needed.
+        For instance, to have a vectorized environment
+        or to re-order the image channels.
+
+        :param env:
+        :param verbose:
+        :param monitor_wrapper: Whether to wrap the env in a ``Monitor`` when possible.
+        :return: The wrapped environment.
+        """
         if not isinstance(env, VecEnv):
-            if self.verbose >= 1:
+            if not is_wrapped(env, Monitor) and monitor_wrapper:
+                if verbose >= 1:
+                    print("Wrapping the env with a `Monitor` wrapper")
+                env = Monitor(env)
+            if verbose >= 1:
                 print("Wrapping the env in a DummyVecEnv.")
             env = DummyVecEnv([lambda: env])
 
-        if is_image_space(env.observation_space) and not isinstance(env, VecTransposeImage):
-            if self.verbose >= 1:
+        if (
+            is_image_space(env.observation_space)
+            and not is_vecenv_wrapped(env, VecTransposeImage)
+            and not is_image_space_channels_first(env.observation_space)
+        ):
+            if verbose >= 1:
                 print("Wrapping the env in a VecTransposeImage.")
             env = VecTransposeImage(env)
+
+        # check if wrapper for dict support is needed when using HER
+        if isinstance(env.observation_space, gym.spaces.dict.Dict):
+            env = ObsDictWrapper(env)
+
         return env
 
     @abstractmethod
@@ -188,7 +225,7 @@ class BaseAlgorithm(ABC):
             eval_env = self.eval_env
 
         if eval_env is not None:
-            eval_env = self._wrap_env(eval_env)
+            eval_env = self._wrap_env(eval_env, self.verbose)
             assert eval_env.num_envs == 1
         return eval_env
 
@@ -402,10 +439,11 @@ class BaseAlgorithm(ABC):
 
         :param env: The environment for learning a policy
         """
-        check_for_correct_spaces(env, self.observation_space, self.action_space)
-        # it must be coherent now
         # if it is not a VecEnv, make it a VecEnv
-        env = self._wrap_env(env)
+        # and do other transformations (dict obs, image transpose) if needed
+        env = self._wrap_env(env, self.verbose)
+        # Check that the observation spaces match
+        check_for_correct_spaces(env, self.observation_space, self.action_space)
 
         self.n_envs = env.num_envs
         self.env = env
@@ -576,6 +614,8 @@ class BaseAlgorithm(ABC):
             raise KeyError("The observation_space and action_space were not given, can't verify new environments")
 
         if env is not None:
+            # Wrap first if needed
+            env = cls._wrap_env(env, data["verbose"])
             # Check if given env is valid
             check_for_correct_spaces(env, data["observation_space"], data["action_space"])
         else:

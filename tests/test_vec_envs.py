@@ -7,6 +7,7 @@ import gym
 import numpy as np
 import pytest
 
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecFrameStack, VecNormalize
 
 N_ENVS = 3
@@ -341,3 +342,101 @@ def test_vecenv_wrapper_getattr():
         _ = double_wrapped.var_b
     with pytest.raises(AttributeError):  # should raise as does not exist
         _ = double_wrapped.nonexistent_attribute
+
+
+def test_framestack_vecenv():
+    """Test that framestack environment stacks on desired axis"""
+
+    image_space_shape = [12, 8, 3]
+    zero_acts = np.zeros([N_ENVS] + image_space_shape)
+
+    transposed_image_space_shape = image_space_shape[::-1]
+    transposed_zero_acts = np.zeros([N_ENVS] + transposed_image_space_shape)
+
+    def make_image_env():
+        return CustomGymEnv(
+            gym.spaces.Box(
+                low=np.zeros(image_space_shape),
+                high=np.ones(image_space_shape) * 255,
+                dtype=np.uint8,
+            )
+        )
+
+    def make_transposed_image_env():
+        return CustomGymEnv(
+            gym.spaces.Box(
+                low=np.zeros(transposed_image_space_shape),
+                high=np.ones(transposed_image_space_shape) * 255,
+                dtype=np.uint8,
+            )
+        )
+
+    def make_non_image_env():
+        return CustomGymEnv(gym.spaces.Box(low=np.zeros((2,)), high=np.ones((2,))))
+
+    vec_env = DummyVecEnv([make_image_env for _ in range(N_ENVS)])
+    vec_env = VecFrameStack(vec_env, n_stack=2)
+    obs, _, _, _ = vec_env.step(zero_acts)
+    vec_env.close()
+
+    # Should be stacked on the last dimension
+    assert obs.shape[-1] == (image_space_shape[-1] * 2)
+
+    # Try automatic stacking on first dimension now
+    vec_env = DummyVecEnv([make_transposed_image_env for _ in range(N_ENVS)])
+    vec_env = VecFrameStack(vec_env, n_stack=2)
+    obs, _, _, _ = vec_env.step(transposed_zero_acts)
+    vec_env.close()
+
+    # Should be stacked on the first dimension (note the transposing in make_transposed_image_env)
+    assert obs.shape[1] == (image_space_shape[-1] * 2)
+
+    # Try forcing dimensions
+    vec_env = DummyVecEnv([make_image_env for _ in range(N_ENVS)])
+    vec_env = VecFrameStack(vec_env, n_stack=2, channels_order="last")
+    obs, _, _, _ = vec_env.step(zero_acts)
+    vec_env.close()
+
+    # Should be stacked on the last dimension
+    assert obs.shape[-1] == (image_space_shape[-1] * 2)
+
+    vec_env = DummyVecEnv([make_image_env for _ in range(N_ENVS)])
+    vec_env = VecFrameStack(vec_env, n_stack=2, channels_order="first")
+    obs, _, _, _ = vec_env.step(zero_acts)
+    vec_env.close()
+
+    # Should be stacked on the first dimension
+    assert obs.shape[1] == (image_space_shape[0] * 2)
+
+    # Test invalid channels_order
+    vec_env = DummyVecEnv([make_image_env for _ in range(N_ENVS)])
+    with pytest.raises(AssertionError):
+        vec_env = VecFrameStack(vec_env, n_stack=2, channels_order="not_valid")
+
+    # Test that it works with non-image envs when no channels_order is given
+    vec_env = DummyVecEnv([make_non_image_env for _ in range(N_ENVS)])
+    vec_env = VecFrameStack(vec_env, n_stack=2)
+
+
+def test_vec_env_is_wrapped():
+    # Test is_wrapped call of subproc workers
+    def make_env():
+        return CustomGymEnv(gym.spaces.Box(low=np.zeros(2), high=np.ones(2)))
+
+    def make_monitored_env():
+        return Monitor(CustomGymEnv(gym.spaces.Box(low=np.zeros(2), high=np.ones(2))))
+
+    # One with monitor, one without
+    vec_env = SubprocVecEnv([make_env, make_monitored_env])
+
+    assert vec_env.env_is_wrapped(Monitor) == [False, True]
+
+    vec_env.close()
+
+    # One with monitor, one without
+    vec_env = DummyVecEnv([make_env, make_monitored_env])
+
+    assert vec_env.env_is_wrapped(Monitor) == [False, True]
+
+    vec_env = VecFrameStack(vec_env, n_stack=2)
+    assert vec_env.env_is_wrapped(Monitor) == [False, True]

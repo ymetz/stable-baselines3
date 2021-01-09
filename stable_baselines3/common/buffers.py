@@ -1,6 +1,6 @@
 import warnings
 from abc import ABC, abstractmethod
-from typing import Generator, Optional, Union
+from typing import Dict, Generator, Optional, Union
 
 import numpy as np
 import torch as th
@@ -129,9 +129,11 @@ class BaseBuffer(ABC):
         return th.as_tensor(array).to(self.device)
 
     @staticmethod
-    def _normalize_obs(obs: np.ndarray, env: Optional[VecNormalize] = None) -> np.ndarray:
+    def _normalize_obs(
+        obs: Union[np.ndarray, Dict[str, np.ndarray]], env: Optional[VecNormalize] = None
+    ) -> Union[np.ndarray, Dict[str, np.ndarray]]:
         if env is not None:
-            return env.normalize_obs(obs).astype(np.float32)
+            return env.normalize_obs(obs)
         return obs
 
     @staticmethod
@@ -257,6 +259,15 @@ class ReplayBuffer(BaseBuffer):
 class RolloutBuffer(BaseBuffer):
     """
     Rollout buffer used in on-policy algorithms like A2C/PPO.
+    It corresponds to ``buffer_size`` transitions collected
+    using the current policy.
+    This experience will be discarded after the policy update.
+    In order to use PPO objective, we also store the current value of each state
+    and the log probability of each taken action.
+
+    The term rollout here refers to the model-free notion and should not
+    be used with the concept of rollout used in model-based RL or planning.
+    Hence, it is only involved in policy and value function training but not action selection.
 
     :param buffer_size: Max number of element in the buffer
     :param observation_space: Observation space
@@ -299,7 +310,7 @@ class RolloutBuffer(BaseBuffer):
         self.generator_ready = False
         super(RolloutBuffer, self).reset()
 
-    def compute_returns_and_advantage(self, last_value: th.Tensor, dones: np.ndarray) -> None:
+    def compute_returns_and_advantage(self, last_values: th.Tensor, dones: np.ndarray) -> None:
         """
         Post-processing step: compute the returns (sum of discounted rewards)
         and GAE advantage.
@@ -310,22 +321,22 @@ class RolloutBuffer(BaseBuffer):
         where R is the discounted reward with value bootstrap,
         set ``gae_lambda=1.0`` during initialization.
 
-        :param last_value:
+        :param last_values:
         :param dones:
 
         """
         # convert to numpy
-        last_value = last_value.clone().cpu().numpy().flatten()
+        last_values = last_values.clone().cpu().numpy().flatten()
 
         last_gae_lam = 0
         for step in reversed(range(self.buffer_size)):
             if step == self.buffer_size - 1:
                 next_non_terminal = 1.0 - dones
-                next_value = last_value
+                next_values = last_values
             else:
                 next_non_terminal = 1.0 - self.dones[step + 1]
-                next_value = self.values[step + 1]
-            delta = self.rewards[step] + self.gamma * next_value * next_non_terminal - self.values[step]
+                next_values = self.values[step + 1]
+            delta = self.rewards[step] + self.gamma * next_values * next_non_terminal - self.values[step]
             last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
             self.advantages[step] = last_gae_lam
         self.returns = self.advantages + self.values

@@ -46,8 +46,8 @@ Breaking Changes
 - The features extractor (CNN extractor) is shared between policy and q-networks for DDPG/SAC/TD3 and only the policy loss used to update it (much faster)
 - Tensorboard legacy logging was dropped in favor of having one logger for the terminal and Tensorboard (cf :ref:`Tensorboard integration <tensorboard>`)
 - We dropped ACKTR/ACER support because of their complexity compared to simpler alternatives (PPO, SAC, TD3) performing as good.
-- We dropped GAIL support as we are focusing on model-free RL only, you can however take a look at the `Imitation Learning Baseline Implementations <https://github.com/HumanCompatibleAI/imitation>`_
-  which are based on SB3.
+- We dropped GAIL support as we are focusing on model-free RL only, you can however take a look at the :ref:`imitation project <imitation>` which implements
+  GAIL and other imitation learning algorithms on top of SB3.
 - ``action_probability`` is currently not implemented in the base class
 
 You can take a look at the `issue about SB3 implementation design <https://github.com/hill-a/stable-baselines/issues/576>`_ for more details.
@@ -59,12 +59,13 @@ Moved Files
 - ``bench/monitor.py`` -> ``common/monitor.py``
 - ``logger.py`` -> ``common/logger.py``
 - ``results_plotter.py`` -> ``common/results_plotter.py``
+- ``common/cmd_util.py`` -> ``common/env_util.py``
 
 Utility functions are no longer exported from ``common`` module, you should import them with their absolute path, e.g.:
 
 .. code-block:: python
 
-  from stable_baselines3.common.cmd_util import make_atari_env, make_vec_env
+  from stable_baselines3.common.env_util import make_atari_env, make_vec_env
   from stable_baselines3.common.utils import set_random_seed
 
 instead of ``from stable_baselines3.common import make_atari_env``
@@ -103,7 +104,7 @@ A2C
 	PyTorch implementation of RMSprop `differs from Tensorflow's <https://github.com/pytorch/pytorch/issues/23796>`_,
 	which leads to `different and potentially more unstable results <https://github.com/DLR-RM/stable-baselines3/pull/110#issuecomment-663255241>`_.
 	Use ``stable_baselines3.common.sb2_compat.rmsprop_tf_like.RMSpropTFLike`` optimizer to match the results
-	with Tensorflow's implementation. This can be done through ``policy_kwargs``: ``A2C(policy_kwargs=dict(optimizer_class=RMSpropTFLike))``
+	with TensorFlow's implementation. This can be done through ``policy_kwargs``: ``A2C(policy_kwargs=dict(optimizer_class=RMSpropTFLike, eps=1e-5))``
 
 
 PPO
@@ -162,6 +163,14 @@ Despite this change, no change in performance should be expected.
 	SAC ``predict()`` method has now ``deterministic=False`` by default for consistency.
 	To match SB2 behavior, you need to explicitly pass ``deterministic=True``
 
+
+HER
+^^^
+
+The ``HER`` implementation now also supports online sampling of the new goals. This is done in a vectorized version.
+The goal selection strategy ``RANDOM`` is no longer supported.
+``HER`` now supports ``VecNormalize`` wrapper but only when ``online_sampling=True``.
+For performance reasons, the maximum number of steps per episodes must be specified (see :ref:`HER <her>` documentation).
 
 
 New logger API
