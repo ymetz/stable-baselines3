@@ -211,7 +211,7 @@ class DQN(OffPolicyAlgorithm):
             else:
                 action = np.array(self.action_space.sample())
         else:
-            action, state = self.policy.predict(observation, state, mask, deterministic)
+            action, state, _ = self.policy.predict(observation, state, mask, deterministic)
         return action, state
 
     def learn(

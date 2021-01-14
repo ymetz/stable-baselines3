@@ -20,7 +20,7 @@ from stable_baselines3.common.distributions import (
     make_proba_distribution,
 )
 from stable_baselines3.common.preprocessing import get_action_dim, is_image_space, preprocess_obs
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, FlattenExtractor, MlpExtractor, NatureCNN, create_mlp
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, FlattenExtractor, MlpExtractor, NatureCNN, create_mlp, TransformerExtractor
 from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.common.utils import get_device, is_vectorized_observation
 from stable_baselines3.common.vec_env import VecTransposeImage
@@ -479,6 +479,7 @@ class ActorCriticPolicy(BasePolicy):
         # Note: If net_arch is None and some features extractor is used,
         #       net_arch here is an empty list and mlp_extractor does not
         #       really contain any layers (acts like an identity module).
+
         self.mlp_extractor = MlpExtractor(
             self.features_dim, net_arch=self.net_arch, activation_fn=self.activation_fn, device=self.device
         )
@@ -684,6 +685,81 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super(ActorCriticCnnPolicy, self).__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch,
+            activation_fn,
+            ortho_init,
+            use_sde,
+            log_std_init,
+            full_std,
+            sde_net_arch,
+            use_expln,
+            squash_output,
+            features_extractor_class,
+            features_extractor_kwargs,
+            normalize_images,
+            optimizer_class,
+            optimizer_kwargs,
+        )
+
+
+class ActorCriticTransformerPolicy(ActorCriticPolicy):
+    """
+    CNN policy class for actor-critic algorithms (has both policy and value prediction).
+    Used by A2C, PPO and the likes.
+
+    :param observation_space: Observation space
+    :param action_space: Action space
+    :param lr_schedule: Learning rate schedule (could be constant)
+    :param net_arch: The specification of the policy and value networks.
+    :param activation_fn: Activation function
+    :param ortho_init: Whether to use or not orthogonal initialization
+    :param use_sde: Whether to use State Dependent Exploration or not
+    :param log_std_init: Initial value for the log standard deviation
+    :param full_std: Whether to use (n_features x n_actions) parameters
+        for the std instead of only (n_features,) when using gSDE
+    :param sde_net_arch: Network architecture for extracting features
+        when using gSDE. If None, the latent features from the policy will be used.
+        Pass an empty list to use the states as features.
+    :param use_expln: Use ``expln()`` function instead of ``exp()`` to ensure
+        a positive standard deviation (cf paper). It allows to keep variance
+        above zero and prevent it from growing too fast. In practice, ``exp()`` is usually enough.
+    :param squash_output: Whether to squash the output using a tanh function,
+        this allows to ensure boundaries when using gSDE.
+    :param features_extractor_class: Features extractor to use.
+    :param features_extractor_kwargs: Keyword arguments
+        to pass to the features extractor.
+    :param normalize_images: Whether to normalize images or not,
+         dividing by 255.0 (True by default)
+    :param optimizer_class: The optimizer to use,
+        ``th.optim.Adam`` by default
+    :param optimizer_kwargs: Additional keyword arguments,
+        excluding the learning rate, to pass to the optimizer
+    """
+
+    def __init__(
+        self,
+        observation_space: gym.spaces.Space,
+        action_space: gym.spaces.Space,
+        lr_schedule: Schedule,
+        net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
+        activation_fn: Type[nn.Module] = nn.Tanh,
+        ortho_init: bool = True,
+        use_sde: bool = False,
+        log_std_init: float = 0.0,
+        full_std: bool = True,
+        sde_net_arch: Optional[List[int]] = None,
+        use_expln: bool = False,
+        squash_output: bool = False,
+        features_extractor_class: Type[BaseFeaturesExtractor] = TransformerExtractor,
+        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+        normalize_images: bool = False,
+        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super(ActorCriticTransformerPolicy, self).__init__(
             observation_space,
             action_space,
             lr_schedule,

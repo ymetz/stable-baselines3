@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Tuple
 
 import gym
 import torch as th
@@ -165,8 +165,8 @@ class DQNPolicy(BasePolicy):
     def forward(self, obs: th.Tensor, deterministic: bool = True) -> th.Tensor:
         return self._predict(obs, deterministic=deterministic)
 
-    def _predict(self, obs: th.Tensor, deterministic: bool = True) -> th.Tensor:
-        return self.q_net._predict(obs, deterministic=deterministic)
+    def _predict(self, obs: th.Tensor, deterministic: bool = True) -> Tuple[th.Tensor, Optional[th.Tensor]]:
+        return self.q_net._predict(obs, deterministic=deterministic), None
 
     def _get_data(self) -> Dict[str, Any]:
         data = super()._get_data()

@@ -187,7 +187,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         with th.no_grad():
             # Compute value for the last timestep
             obs_tensor = th.as_tensor(new_obs).to(self.device)
-            _, values, _ = self.policy.forward(obs_tensor)
+            _, values, _, _ = self.policy.forward(obs_tensor)
 
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 

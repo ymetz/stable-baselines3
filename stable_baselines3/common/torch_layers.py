@@ -7,6 +7,7 @@ from torch import nn
 
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
 from stable_baselines3.common.utils import get_device
+from stable_baselines3.common.torch_policy_components import MultiHeadAttention, zero_pad, relative_position_embedding, FullyConnected, GRUGate, SkipConnection
 
 
 class BaseFeaturesExtractor(nn.Module):
@@ -222,6 +223,99 @@ class MlpExtractor(nn.Module):
         """
         shared_latent = self.shared_net(features)
         return self.policy_net(shared_latent), self.value_net(shared_latent)
+
+class TransformerExtractor(nn.Module):
+    """
+    Constructs a "Swarmformer", a transformer encoder specifically adapted for a mix of tokens and timesteps.
+
+
+    Adapted from https://github.com/ray-project/ray/blob/master/rllib/models/torch/attention_net.py
+
+    :param feature_dim: Dimension of the feature vector (can be the output of a CNN)
+    :param net_arch: The specification of the policy and value networks.
+        See above for details on its formatting.
+    :param activation_fn: The activation function to use for the networks.
+    :param device:
+    """
+
+    def __init__(
+        self,
+        observation_space: gym.spaces.Space,
+        features_dim: int = 128,
+        obs_per_timestep: int = 5,
+        num_transformer_units: int = 2,
+        attention_dim: int = 32,
+        num_heads: int = 2,
+        head_dim: int = 16,
+        position_wise_mlp_dim: int = 32,
+        init_gru_gate_bias: float = 2.0,
+        activation_fn: Type[nn.Module] = th.nn.ReLU,
+        device: Union[th.device, str] = "auto",
+    ):
+        super(TransformerExtractor, self).__init__()
+        self.single_obs_dim = observation_space.shape[1]
+        self.features_dim = features_dim
+        self.input_dim = 64
+        self.device = get_device(device)
+        self.num_transformer_units = num_transformer_units
+        self.attention_dim = attention_dim
+        self.num_heads = num_heads,
+        self.head_dim = head_dim,
+        self.position_wise_mlp_dim = position_wise_mlp_dim,
+        self.init_gru_gate_bias = init_gru_gate_bias
+        self.obs_per_timestep = obs_per_timestep # number of obs per timesteps
+
+        self.linear_layer = FullyConnected(in_size=self.single_obs_dim, out_size=self.attention_dim).to(self.device)
+
+        transformer_layers = []
+
+        for i in range(self.num_transformer_units):
+            # RelativeMultiHeadAttention part.
+            MHA_layer = SkipConnection(
+                MultiHeadAttention(
+                    in_dim=self.attention_dim,
+                    out_dim=self.attention_dim,
+                    num_heads=num_heads,
+                    head_dim=head_dim,
+                    input_layernorm=True,
+                    output_activation=nn.ReLU,
+                    device=self.device),
+                fan_in_layer=GRUGate(self.attention_dim, init_gru_gate_bias, device=self.device))
+
+            # Position-wise MultiLayerPerceptron part.
+            E_layer = SkipConnection(
+                nn.Sequential(
+                    th.nn.LayerNorm(self.attention_dim),
+                    FullyConnected(
+                        in_size=self.attention_dim,
+                        out_size=position_wise_mlp_dim,
+                        use_bias=False,
+                        activation_fn=nn.ReLU),
+                    FullyConnected(
+                        in_size=position_wise_mlp_dim,
+                        out_size=self.attention_dim,
+                        use_bias=False,
+                        activation_fn=nn.ReLU)),
+                fan_in_layer=GRUGate(self.attention_dim, init_gru_gate_bias, device=self.device))
+
+            # Build a list of all attanlayers in order.
+            transformer_layers.extend([MHA_layer, E_layer])
+
+        transformer_layers.append(th.nn.Flatten())
+        transformer_layers.append(nn.Linear(self.input_dim*self.attention_dim, self.features_dim))
+
+        self.transformer = nn.Sequential(*transformer_layers).to(self.device)
+
+        print("Swarmformer # trainable paramaters", sum(p.numel() for p in self.transformer.parameters() if p.requires_grad))
+
+    def forward(self, features: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        """
+        :return: latent_policy, latent_value of the specified network.
+            If all layers are shared, then ``latent_policy == latent_value``
+        """
+        processed_obs = self.linear_layer(zero_pad(features, self.input_dim, dim=1, device=self.device)) \
+                        + relative_position_embedding(self.input_dim, self.attention_dim, repeat_pos_encoding=self.obs_per_timestep).to(self.device)
+        return self.transformer(processed_obs)
 
 
 def get_actor_critic_arch(net_arch: Union[List[int], Dict[str, List[int]]]) -> Tuple[List[int], List[int]]:
