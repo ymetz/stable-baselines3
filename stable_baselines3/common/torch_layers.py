@@ -318,6 +318,61 @@ class TransformerExtractor(nn.Module):
         return self.transformer(processed_obs)
 
 
+class LSTM(nn.Module):
+    """
+    Simplified LSTM policy with shared layers only (currently only applicable to imitation learning, not RL).
+    Do not use in production!
+    """
+    def __init__(
+        self,
+        in_features_dim: gym.spaces.Space,
+        hidden_layer_size: int = 32,
+        n_lstm_cells: int = 16,
+        batch_size:int = 1024,
+        orthogonal_init: bool = False,
+        activation_fn: Type[nn.Module] = nn.Tanh,
+        device: Union[th.device, str] = "gpu",
+    ):
+        super(LSTM, self).__init__()
+        self.device = get_device(device)
+        self.hidden_layer_size = hidden_layer_size
+        self.n_lstm_cells = n_lstm_cells
+        self.lstm = []
+        self.batch_size = batch_size
+        last_layer_dim_shared = hidden_layer_size
+
+        first_input_size = in_features_dim
+
+        self.lstm = nn.LSTM(first_input_size, hidden_layer_size, num_layers=n_lstm_cells)
+        self.linear = nn.Linear(hidden_layer_size, hidden_layer_size)
+
+        self.hidden = self.init_hidden(self.batch_size)
+
+    def forward(self, input: th.Tensor) -> Tuple[ th.Tensor]:
+        # hidden state firs then cell state
+        act, self.hidden = self.lstm(input, self.hidden)
+
+        return self.linear(act)
+
+    def init_hidden(self, batch_size):
+
+        # initialize hidden state with zero weights, and move to GPU if available
+        hidden = (th.randn(self.n_lstm_cells,
+                            batch_size, self.hidden_layer_size).to(self.device),
+                  th.randn(self.n_lstm_cells,
+                            batch_size, self.hidden_layer_size).to(self.device))
+
+        return hidden
+
+    def get_hidden(self):
+        return self.hidden
+
+    def set_hidden(self, hidden):
+        self.hidden = hidden
+
+    def reset_hidden(self):
+        self.hidden = self.init_hidden(self.batch_size)
+
 def get_actor_critic_arch(net_arch: Union[List[int], Dict[str, List[int]]]) -> Tuple[List[int], List[int]]:
     """
     Get the actor and critic network architectures for off-policy actor-critic algorithms (SAC, TD3, DDPG).
