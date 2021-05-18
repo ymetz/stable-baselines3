@@ -19,7 +19,9 @@ TD3          ✔️          ❌            ❌                ❌              
 
 
 .. note::
-    Non-array spaces such as ``Dict`` or ``Tuple`` are not currently supported by any algorithm.
+  ``Tuple`` observation spaces are not supported by any environment
+  however single-level ``Dict`` spaces are (cf. :ref:`Examples <examples>`).
+
 
 Actions ``gym.spaces``:
 
@@ -41,10 +43,19 @@ Actions ``gym.spaces``:
   See `Issue #339 <https://github.com/hill-a/stable-baselines/issues/339>`_ for more info.
 
 
+.. note::
+
+  When using off-policy algorithms, `Time Limits <https://arxiv.org/abs/1712.00378>`_ (aka timeouts) are handled
+  properly (cf. `issue #284 <https://github.com/DLR-RM/stable-baselines3/issues/284>`_).
+  You can revert to SB3 < 2.1.0 behavior by passing ``handle_timeout_termination=False``
+  via the ``replay_buffer_kwargs`` argument.
+
+
+
 Reproducibility
 ---------------
 
-Completely reproducible results are not guaranteed across Tensorflow releases or different platforms.
+Completely reproducible results are not guaranteed across PyTorch releases or different platforms.
 Furthermore, results need not be reproducible between CPU and GPU executions, even when using identical seeds.
 
 In order to make computations deterministics, on your specific problem on one specific platform,

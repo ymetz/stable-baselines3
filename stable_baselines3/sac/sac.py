@@ -6,6 +6,7 @@ import torch as th
 from torch.nn import functional as F
 
 from stable_baselines3.common import logger
+from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
@@ -37,15 +38,16 @@ class SAC(OffPolicyAlgorithm):
     :param batch_size: Minibatch size for each gradient update
     :param tau: the soft update coefficient ("Polyak update", between 0 and 1)
     :param gamma: the discount factor
-    :param train_freq: Update the model every ``train_freq`` steps. Set to `-1` to disable.
-    :param gradient_steps: How many gradient steps to do after each rollout
-        (see ``train_freq`` and ``n_episodes_rollout``)
+    :param train_freq: Update the model every ``train_freq`` steps. Alternatively pass a tuple of frequency and unit
+        like ``(5, "step")`` or ``(2, "episode")``.
+    :param gradient_steps: How many gradient steps to do after each rollout (see ``train_freq``)
         Set to ``-1`` means to do as many gradient steps as steps done in the environment
         during the rollout.
-    :param n_episodes_rollout: Update the model every ``n_episodes_rollout`` episodes.
-        Note that this cannot be used at the same time as ``train_freq``. Set to `-1` to disable.
     :param action_noise: the action noise type (None by default), this can help
         for hard exploration problem. Cf common.noise for the different action noise type.
+    :param replay_buffer_class: Replay buffer class to use (for instance ``HerReplayBuffer``).
+        If ``None``, it will be automatically selected.
+    :param replay_buffer_kwargs: Keyword arguments to pass to the replay buffer on creation.
     :param optimize_memory_usage: Enable a memory efficient variant of the replay buffer
         at a cost of more complexity.
         See https://github.com/DLR-RM/stable-baselines3/issues/37#issuecomment-637501195
@@ -76,15 +78,16 @@ class SAC(OffPolicyAlgorithm):
         policy: Union[str, Type[SACPolicy]],
         env: Union[GymEnv, str],
         learning_rate: Union[float, Schedule] = 3e-4,
-        buffer_size: int = int(1e6),
+        buffer_size: int = 1000000,  # 1e6
         learning_starts: int = 100,
         batch_size: int = 256,
         tau: float = 0.005,
         gamma: float = 0.99,
-        train_freq: int = 1,
+        train_freq: Union[int, Tuple[int, str]] = 1,
         gradient_steps: int = 1,
-        n_episodes_rollout: int = -1,
         action_noise: Optional[ActionNoise] = None,
+        replay_buffer_class: Optional[ReplayBuffer] = None,
+        replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
         optimize_memory_usage: bool = False,
         ent_coef: Union[str, float] = "auto",
         target_update_interval: int = 1,
@@ -113,8 +116,9 @@ class SAC(OffPolicyAlgorithm):
             gamma,
             train_freq,
             gradient_steps,
-            n_episodes_rollout,
             action_noise,
+            replay_buffer_class=replay_buffer_class,
+            replay_buffer_kwargs=replay_buffer_kwargs,
             policy_kwargs=policy_kwargs,
             tensorboard_log=tensorboard_log,
             verbose=verbose,
@@ -300,9 +304,9 @@ class SAC(OffPolicyAlgorithm):
 
     def _get_torch_save_params(self) -> Tuple[List[str], List[str]]:
         state_dicts = ["policy", "actor.optimizer", "critic.optimizer"]
-        saved_pytorch_variables = ["log_ent_coef"]
         if self.ent_coef_optimizer is not None:
+            saved_pytorch_variables = ["log_ent_coef"]
             state_dicts.append("ent_coef_optimizer")
         else:
-            saved_pytorch_variables.append("ent_coef_tensor")
+            saved_pytorch_variables = ["ent_coef_tensor"]
         return state_dicts, saved_pytorch_variables

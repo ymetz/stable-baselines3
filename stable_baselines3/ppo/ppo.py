@@ -1,3 +1,4 @@
+import warnings
 from typing import Any, Dict, Optional, Type, Union
 
 import numpy as np
@@ -28,7 +29,9 @@ class PPO(OnPolicyAlgorithm):
     :param learning_rate: The learning rate, it can be a function
         of the current progress remaining (from 1 to 0)
     :param n_steps: The number of steps to run for each environment per update
-        (i.e. batch size is n_steps * n_env where n_env is number of environment copies running in parallel)
+        (i.e. rollout buffer size is n_steps * n_envs where n_envs is number of environment copies running in parallel)
+        NOTE: n_steps * n_envs must be greater than 1 (because of the advantage normalization)
+        See https://github.com/pytorch/pytorch/issues/29372
     :param batch_size: Minibatch size
     :param n_epochs: Number of epoch when optimizing the surrogate loss
     :param gamma: Discount factor
@@ -115,7 +118,24 @@ class PPO(OnPolicyAlgorithm):
                 spaces.MultiBinary,
             ),
         )
-
+        if self.env is not None:
+            # Check that `n_steps * n_envs > 1` to avoid NaN
+            # when doing advantage normalization
+            buffer_size = self.env.num_envs * self.n_steps
+            assert (
+                buffer_size > 1
+            ), f"`n_steps * n_envs` must be greater than 1. Currently n_steps={self.n_steps} and n_envs={self.env.num_envs}"
+            # Check that the rollout buffer size is a multiple of the mini-batch size
+            untruncated_batches = buffer_size // batch_size
+            if buffer_size % batch_size > 0:
+                warnings.warn(
+                    f"You have specified a mini-batch size of {batch_size},"
+                    f" but because the `RolloutBuffer` is of size `n_steps * n_envs = {buffer_size}`,"
+                    f" after every {untruncated_batches} untruncated mini-batches,"
+                    f" there will be a truncated mini-batch of size {buffer_size % batch_size}\n"
+                    f"We recommend using a `batch_size` that is a multiple of `n_steps * n_envs`.\n"
+                    f"Info: (n_steps={self.n_steps} and n_envs={self.env.num_envs})"
+                )
         self.batch_size = batch_size
         self.n_epochs = n_epochs
         self.clip_range = clip_range
@@ -148,9 +168,11 @@ class PPO(OnPolicyAlgorithm):
         if self.clip_range_vf is not None:
             clip_range_vf = self.clip_range_vf(self._current_progress_remaining)
 
-        entropy_losses, all_kl_divs = [], []
+        entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
+
+        continue_training = True
 
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
@@ -211,18 +233,29 @@ class PPO(OnPolicyAlgorithm):
 
                 loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
 
+                # Calculate approximate form of reverse KL Divergence for early stopping
+                # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
+                # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419
+                # and Schulman blog: http://joschu.net/blog/kl-approx.html
+                with th.no_grad():
+                    log_ratio = log_prob - rollout_data.old_log_prob
+                    approx_kl_div = th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
+                    approx_kl_divs.append(approx_kl_div)
+
+                if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
+                    continue_training = False
+                    if self.verbose >= 1:
+                        print(f"Early stopping at step {epoch} due to reaching max kl: {approx_kl_div:.2f}")
+                    break
+
                 # Optimization step
                 self.policy.optimizer.zero_grad()
                 loss.backward()
                 # Clip grad norm
                 th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
-                approx_kl_divs.append(th.mean(rollout_data.old_log_prob - log_prob).detach().cpu().numpy())
 
-            all_kl_divs.append(np.mean(approx_kl_divs))
-
-            if self.target_kl is not None and np.mean(approx_kl_divs) > 1.5 * self.target_kl:
-                print(f"Early stopping at step {epoch} due to reaching max kl: {np.mean(approx_kl_divs):.2f}")
+            if not continue_training:
                 break
 
         self._n_updates += self.n_epochs

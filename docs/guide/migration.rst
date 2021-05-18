@@ -33,6 +33,13 @@ You can also take a look at the `rl-zoo3 <https://github.com/DLR-RM/rl-baselines
 to the `rl-zoo <https://github.com/araffin/rl-baselines-zoo>`_ of SB2 to have a concrete example of successful migration.
 
 
+.. note::
+
+  If you experience massive slow-down switching to PyTorch, you may need to play with the number of threads used,
+  using ``torch.set_num_threads(1)`` or ``OMP_NUM_THREADS=1``, see `issue #122 <https://github.com/DLR-RM/stable-baselines3/issues/122>`_
+  and `issue #90 <https://github.com/DLR-RM/stable-baselines3/issues/90>`_.
+
+
 Breaking Changes
 ================
 
@@ -49,6 +56,7 @@ Breaking Changes
 - We dropped GAIL support as we are focusing on model-free RL only, you can however take a look at the :ref:`imitation project <imitation>` which implements
   GAIL and other imitation learning algorithms on top of SB3.
 - ``action_probability`` is currently not implemented in the base class
+- ``pretrain()`` method for behavior cloning was removed (see `issue #27 <https://github.com/DLR-RM/stable-baselines3/issues/27>`_)
 
 You can take a look at the `issue about SB3 implementation design <https://github.com/hill-a/stable-baselines/issues/576>`_ for more details.
 
@@ -90,7 +98,7 @@ Base-class (all algorithms)
 Policies
 ^^^^^^^^
 
-- ``cnn_extractor`` -> ``feature_extractor``, as ``feature_extractor`` in now used with ``MlpPolicy`` too
+- ``cnn_extractor`` -> ``features_extractor``, as ``features_extractor`` in now used with ``MlpPolicy`` too
 
 A2C
 ^^^
