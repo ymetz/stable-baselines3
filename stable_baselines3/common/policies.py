@@ -92,9 +92,9 @@ class BaseModel(nn.Module, ABC):
         pass
 
     def _update_features_extractor(
-            self,
-            net_kwargs: Dict[str, Any],
-            features_extractor: Optional[BaseFeaturesExtractor] = None,
+        self,
+        net_kwargs: Dict[str, Any],
+        features_extractor: Optional[BaseFeaturesExtractor] = None,
     ) -> Dict[str, Any]:
         """
         Update the network keyword arguments and create a new features extractor object if needed.
@@ -246,11 +246,11 @@ class BasePolicy(BaseModel):
         """
 
     def predict(
-            self,
-            observation: Union[np.ndarray, Dict[str, np.ndarray]],
-            state: Optional[np.ndarray] = None,
-            mask: Optional[np.ndarray] = None,
-            deterministic: bool = False,
+        self,
+        observation: Union[np.ndarray, Dict[str, np.ndarray]],
+        state: Optional[np.ndarray] = None,
+        mask: Optional[np.ndarray] = None,
+        deterministic: bool = False,
     ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """
         Get the policy action and state from an observation (and optional state).
@@ -719,7 +719,6 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
             optimizer_kwargs,
         )
 
-
 class ActorCriticTransformerPolicy(ActorCriticPolicy):
     """
     CNN policy class for actor-critic algorithms (has both policy and value prediction).
@@ -793,7 +792,6 @@ class ActorCriticTransformerPolicy(ActorCriticPolicy):
             optimizer_kwargs,
         )
 
-
 class MultiInputActorCriticPolicy(ActorCriticPolicy):
     """
     MultiInputActorClass policy class for actor-critic algorithms (has both policy and value prediction).
@@ -829,24 +827,24 @@ class MultiInputActorCriticPolicy(ActorCriticPolicy):
     """
 
     def __init__(
-            self,
-            observation_space: gym.spaces.Dict,
-            action_space: gym.spaces.Space,
-            lr_schedule: Callable,
-            net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
-            activation_fn: Type[nn.Module] = nn.Tanh,
-            ortho_init: bool = True,
-            use_sde: bool = False,
-            log_std_init: float = 0.0,
-            full_std: bool = True,
-            sde_net_arch: Optional[List[int]] = None,
-            use_expln: bool = False,
-            squash_output: bool = False,
-            features_extractor_class: Type[BaseFeaturesExtractor] = CombinedExtractor,
-            features_extractor_kwargs: Optional[Dict[str, Any]] = None,
-            normalize_images: bool = True,
-            optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
-            optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        self,
+        observation_space: gym.spaces.Dict,
+        action_space: gym.spaces.Space,
+        lr_schedule: Callable,
+        net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
+        activation_fn: Type[nn.Module] = nn.Tanh,
+        ortho_init: bool = True,
+        use_sde: bool = False,
+        log_std_init: float = 0.0,
+        full_std: bool = True,
+        sde_net_arch: Optional[List[int]] = None,
+        use_expln: bool = False,
+        squash_output: bool = False,
+        features_extractor_class: Type[BaseFeaturesExtractor] = CombinedExtractor,
+        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+        normalize_images: bool = True,
+        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super(MultiInputActorCriticPolicy, self).__init__(
             observation_space,
