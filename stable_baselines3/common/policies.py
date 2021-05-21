@@ -245,30 +245,17 @@ class BasePolicy(BaseModel):
         :return: Taken action according to the policy
         """
 
-    def predict(
-        self,
-        observation: Union[np.ndarray, Dict[str, np.ndarray]],
-        state: Optional[np.ndarray] = None,
-        mask: Optional[np.ndarray] = None,
-        deterministic: bool = False,
-    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    def preprocesses_obs_for_model(
+            self,
+            observation: Union[np.ndarray, Dict[str, np.ndarray]]
+    ) -> Tuple[Union[np.ndarray, Dict[str, np.ndarray]], bool]:
         """
-        Get the policy action and state from an observation (and optional state).
-        Includes sugar-coating to handle different observations (e.g. normalizing images).
+        Preporcesses obs both for prediction and evaluate action
 
-        :param observation: the input observation
-        :param state: The last states (can be None, used in recurrent policies)
-        :param mask: The last masks (can be None, used in recurrent policies)
-        :param deterministic: Whether or not to return deterministic actions.
-        :return: the model's action and the next state
-            (used in recurrent policies)
+        :param observation
+        :return: Observation as PyTorch tensor
+        :return:
         """
-        # TODO (GH/1): add support for RNN policies
-        # if state is None:
-        #     state = self.initial_state
-        # if mask is None:
-        #     mask = [False for _ in range(self.n_envs)]
-
         vectorized_env = False
         if isinstance(observation, dict):
             # need to copy the dict as the dict in VecFrameStack will become a torch tensor
@@ -297,6 +284,33 @@ class BasePolicy(BaseModel):
             # Add batch dimension if needed
             observation = observation.reshape((-1,) + self.observation_space.shape)
 
+        return observation, vectorized_env
+
+    def predict(
+        self,
+        observation: Union[np.ndarray, Dict[str, np.ndarray]],
+        state: Optional[np.ndarray] = None,
+        mask: Optional[np.ndarray] = None,
+        deterministic: bool = False,
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """
+        Get the policy action and state from an observation (and optional state).
+        Includes sugar-coating to handle different observations (e.g. normalizing images).
+
+        :param observation: the input observation
+        :param state: The last states (can be None, used in recurrent policies)
+        :param mask: The last masks (can be None, used in recurrent policies)
+        :param deterministic: Whether or not to return deterministic actions.
+        :return: the model's action and the next state
+            (used in recurrent policies)
+        """
+        # TODO (GH/1): add support for RNN policies
+        # if state is None:
+        #     state = self.initial_state
+        # if mask is None:
+        #     mask = [False for _ in range(self.n_envs)]
+
+        observation, vectorized_env = self.preprocesses_obs_for_model(observation)
         observation = obs_as_tensor(observation, self.device)
 
         with th.no_grad():
@@ -554,7 +568,7 @@ class ActorCriticPolicy(BasePolicy):
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
 
-    def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+    def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
         """
         Forward pass in all the networks (actor and critic)
 
@@ -568,7 +582,7 @@ class ActorCriticPolicy(BasePolicy):
         distribution = self._get_action_dist_from_latent(latent_pi, latent_sde=latent_sde)
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
-        return actions, values, log_prob
+        return actions, values, log_prob, self.action_net(latent_pi)
 
     def _get_latent(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
@@ -638,6 +652,8 @@ class ActorCriticPolicy(BasePolicy):
         :return: estimated value, log likelihood of taking those actions
             and entropy of the action distribution.
         """
+        obs, _ = self.preprocesses_obs_for_model(obs)
+        obs = obs_as_tensor(obs, self.device)
         latent_pi, latent_vf, latent_sde = self._get_latent(obs)
         distribution = self._get_action_dist_from_latent(latent_pi, latent_sde)
         log_prob = distribution.log_prob(actions)
