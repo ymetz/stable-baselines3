@@ -4,7 +4,7 @@ Changelog
 ==========
 
 
-Release 1.1.0a7 (WIP)
+Release 1.1.0a10 (WIP)
 ---------------------------
 
 **Dict observation support, timeout handling and refactored HER**
@@ -27,6 +27,7 @@ Breaking Changes:
 
 - Updated the KL Divergence estimator in the PPO algorithm to be positive definite and have lower variance (@09tangriro)
 - Updated the KL Divergence check in the PPO algorithm to be before the gradient update step rather than after end of epoch (@09tangriro)
+- Removed parameter ``channels_last`` from ``is_image_space`` as it can be inferred.
 
 New Features:
 ^^^^^^^^^^^^^
@@ -40,9 +41,12 @@ New Features:
   to handle gym3-style vectorized environments (@vwxyzjn)
 - Ignored the terminal observation if the it is not provided by the environment
   such as the gym3-style vectorized environments. (@vwxyzjn)
-- Add policy_base as input to the OnPolicyAlgorithm for more flexibility (@09tangriro)
+- Added policy_base as input to the OnPolicyAlgorithm for more flexibility (@09tangriro)
 - Added support for image observation when using ``HER``
 - Added ``replay_buffer_class`` and ``replay_buffer_kwargs`` arguments to off-policy algorithms
+- Added ``kl_divergence`` helper for ``Distribution`` classes (@09tangriro)
+- Added support for vector environments with ``num_envs > 1`` (@benblack769)
+- Added ``wrapper_kwargs`` argument to ``make_vec_env`` (@amy12xx)
 
 Bug Fixes:
 ^^^^^^^^^^
@@ -59,6 +63,8 @@ Others:
 - Updated ``env_checker`` to reflect support of dict observation spaces
 - Added Code of Conduct
 - Added tests for GAE and lambda return computation
+- Updated distribution entropy test (thanks @09tangriro)
+- Added sanity check ``batch_size > 1`` in PPO to avoid NaN in advantage normalization
 
 Documentation:
 ^^^^^^^^^^^^^^
@@ -72,6 +78,10 @@ Documentation:
 - Added example for using ``ProcgenEnv``
 - Added note about advanced custom policy example for off-policy algorithms
 - Fixed DQN unicode checkmarks
+- Updated migration guide (@juancroldan)
+- Pinned ``docutils==0.16`` to avoid issue with rtd theme
+- Clarified callback ``save_freq`` definition
+
 
 Release 1.0 (2021-03-15)
 ------------------------
@@ -687,4 +697,4 @@ And all the contributors:
 @tirafesi @blurLake @koulakis @joeljosephjin @shwang @rk37 @andyshih12 @RaphaelWag @xicocaio
 @diditforlulz273 @liorcohen5 @ManifoldFR @mloo3 @SwamyDev @wmmc88 @megan-klaiber @thisray
 @tfederico @hn2 @LucasAlegre @AptX395 @zampanteymedio @JadenTravnik @decodyng @ardabbour @lorenz-h @mschweizer @lorepieri8 @vwxyzjn
-@ShangqunYu @PierreExeter @JacopoPan @ltbd78 @tom-doerr @Atlis @liusida @09tangriro
+@ShangqunYu @PierreExeter @JacopoPan @ltbd78 @tom-doerr @Atlis @liusida @09tangriro @amy12xx @juancroldan @benblack769
